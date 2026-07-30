@@ -730,15 +730,49 @@ bool WrappedOpenGL::Serialise_glShaderSource(SerialiserType &ser, GLuint shaderH
 
   if(IsReplayingAndReading())
   {
-    rdcarray<const char *> strs;
-    for(size_t i = 0; i < sources.size(); i++)
-      strs.push_back(sources[i].c_str());
-
     ResourceId id = GetResourceManager()->GetResID(shader);
 
-    m_Shaders[id].sources = sources;
+    // OES_EGL_image_external support: a shader that samples an external texture via
+    // samplerExternalOES can't be replayed against the original external source (we captured the
+    // texture as a plain 2D snapshot instead, and bind that at the glEGLImageTargetTexture2DOES
+    // replay). We rewrite samplerExternalOES -> sampler2D so the shader samples our 2D snapshot.
+    bool needsRewrite = false;
+    for(size_t i = 0; i < sources.size() && !needsRewrite; i++)
+      needsRewrite = (sources[i].find("samplerExternalOES") >= 0);
 
-    GL.glShaderSource(shader.name, (GLsizei)sources.size(), strs.data(), NULL);
+    rdcarray<rdcstr> compiledSources = sources;
+    if(needsRewrite)
+    {
+      compiledSources.clear();
+      for(size_t i = 0; i < sources.size(); i++)
+      {
+        rdcstr rewritten = sources[i];
+        const rdcstr token("samplerExternalOES");
+        const rdcstr repl("sampler2D");
+        int off = 0;
+        while(true)
+        {
+          int idx = rewritten.find(token, off);
+          if(idx < 0)
+            break;
+          rewritten = rewritten.substr(0, idx) + repl + rewritten.substr(idx + (int)token.size());
+          off = idx + (int)repl.size();
+        }
+        compiledSources.push_back(rewritten);
+      }
+      m_Shaders[id].externalOESRewritten = true;
+    }
+
+    // store the (possibly rewritten) source - this is what actually gets compiled, and also what
+    // any GLSL->SPIR-V reflection path will see, so it must be valid GLSL (sampler2D).
+    m_Shaders[id].sources = compiledSources;
+
+    rdcarray<const char *> strs;
+    for(size_t i = 0; i < compiledSources.size(); i++)
+      strs.push_back(compiledSources[i].c_str());
+
+    GL.glShaderSource(shader.name, (GLsizei)compiledSources.size(), strs.data(), NULL);
+
 
     // if we've already disassembled this shader, undo all that.
     // Note this means we don't support compiling the same shader multiple times

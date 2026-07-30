@@ -5256,6 +5256,9 @@ bool WrappedOpenGL::ProcessChunk(ReadSerialiser &ser, GLChunk chunk)
     case GLChunk::glGetPerfQueryIdByNameINTEL:
     case GLChunk::glGetPerfQueryInfoINTEL:
 
+    case GLChunk::glEGLImageTargetTexture2DOES:
+      return Serialise_glEGLImageTargetTexture2DOES(ser, eGL_NONE, 0);
+
     case GLChunk::Max:
       RDCERR("Unexpected chunk %s, or missing case for processing! Skipping...",
              ToStr(chunk).c_str());

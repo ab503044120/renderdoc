@@ -330,6 +330,466 @@ void WrappedOpenGL::glBindTexture(GLenum target, GLuint texture)
   }
 }
 
+ResourceId WrappedOpenGL::SnapshotExternalOESTexture(ResourceId externalId, GLuint externalName,
+                                                     uint32_t w, uint32_t h)
+{
+  // already captured this external texture? reuse the existing 2D snapshot.
+  auto it = m_ExternalOESSnapshot.find(externalId);
+  if(it != m_ExternalOESSnapshot.end())
+    return it->second;
+
+  // An OES_EGL_image_external texture cannot be attached to an FBO nor read back directly, so we
+  // sample it with a trivial shader and render the result into a plain 2D colour attachment.
+  GLuint snap = 0;
+  GL.glGenTextures(1, &snap);
+  GL.glBindTexture(eGL_TEXTURE_2D, snap);
+  GL.glTexImage2D(eGL_TEXTURE_2D, 0, eGL_RGBA, (GLsizei)w, (GLsizei)h, 0, eGL_RGBA,
+                  eGL_UNSIGNED_BYTE, NULL);
+  GL.glTexParameteri(eGL_TEXTURE_2D, eGL_TEXTURE_MIN_FILTER, eGL_LINEAR);
+  GL.glTexParameteri(eGL_TEXTURE_2D, eGL_TEXTURE_MAG_FILTER, eGL_LINEAR);
+  GL.glTexParameteri(eGL_TEXTURE_2D, eGL_TEXTURE_WRAP_S, eGL_CLAMP_TO_EDGE);
+  GL.glTexParameteri(eGL_TEXTURE_2D, eGL_TEXTURE_WRAP_T, eGL_CLAMP_TO_EDGE);
+  GL.glBindTexture(eGL_TEXTURE_2D, 0);
+
+  GLuint fbo = 0;
+  GL.glGenFramebuffers(1, &fbo);
+  GL.glBindFramebuffer(eGL_FRAMEBUFFER, fbo);
+  GL.glFramebufferTexture2D(eGL_FRAMEBUFFER, eGL_COLOR_ATTACHMENT0, eGL_TEXTURE_2D, snap, 0);
+
+  // trivial copy program: fullscreen triangle, sample the external texture, output to the 2D FBO.
+  static const char *vss =
+      "attribute vec2 aPos;\n"
+      "attribute vec2 aUV;\n"
+      "varying vec2 vUV;\n"
+      "void main(){ vUV = aUV; gl_Position = vec4(aPos, 0.0, 1.0); }\n";
+  static const char *fss =
+      "#extension GL_OES_EGL_image_external : require\n"
+      "precision mediump float;\n"
+      "uniform samplerExternalOES uTex;\n"
+      "varying vec2 vUV;\n"
+      "void main(){ gl_FragColor = texture2D(uTex, vUV); }\n";
+
+  GLuint vs = GL.glCreateShader(eGL_VERTEX_SHADER);
+  GL.glShaderSource(vs, 1, &vss, NULL);
+  GL.glCompileShader(vs);
+  GLuint fs = GL.glCreateShader(eGL_FRAGMENT_SHADER);
+  GL.glShaderSource(fs, 1, &fss, NULL);
+  GL.glCompileShader(fs);
+  GLuint prog = GL.glCreateProgram();
+  GL.glAttachShader(prog, vs);
+  GL.glAttachShader(prog, fs);
+  GL.glBindAttribLocation(prog, 0, "aPos");
+  GL.glBindAttribLocation(prog, 1, "aUV");
+  GL.glLinkProgram(prog);
+
+  float verts[12] = {
+      -1.0f, -1.0f, 0.0f, 0.0f,
+      3.0f,  -1.0f, 2.0f, 0.0f,
+      -1.0f, 3.0f,  0.0f, 2.0f,
+  };
+
+  GLuint vbo = 0;
+  GL.glGenBuffers(1, &vbo);
+  GL.glBindBuffer(eGL_ARRAY_BUFFER, vbo);
+  GL.glBufferData(eGL_ARRAY_BUFFER, sizeof(verts), verts, eGL_STATIC_DRAW);
+
+  // save GL state we are about to disturb
+  GLint prevActiveTex = 0, prevProgram = 0, prevArrayBuf = 0;
+  GLint prevDrawFBO = 0, prevReadFBO = 0, prevUnit0Tex2D = 0, prevUnit0TexExt = 0;
+  GLint prevA0 = 0, prevA1 = 0;
+  GLint prevViewport[4] = {0, 0, 1, 1};
+  GLboolean prevBlend = GL.glIsEnabled(eGL_BLEND);
+  GLboolean prevDepth = GL.glIsEnabled(eGL_DEPTH_TEST);
+  GLboolean prevCull = GL.glIsEnabled(eGL_CULL_FACE);
+  GLboolean prevScissor = GL.glIsEnabled(eGL_SCISSOR_TEST);
+  GL.glGetIntegerv(eGL_ACTIVE_TEXTURE, &prevActiveTex);
+  GL.glGetIntegerv(eGL_CURRENT_PROGRAM, &prevProgram);
+  GL.glGetIntegerv(eGL_ARRAY_BUFFER_BINDING, &prevArrayBuf);
+  GL.glGetIntegerv(eGL_DRAW_FRAMEBUFFER_BINDING, &prevDrawFBO);
+  GL.glGetIntegerv(eGL_READ_FRAMEBUFFER_BINDING, &prevReadFBO);
+  GL.glGetIntegerv(eGL_VIEWPORT, prevViewport);
+  GL.glGetVertexAttribiv(0, eGL_VERTEX_ATTRIB_ARRAY_ENABLED, &prevA0);
+  GL.glGetVertexAttribiv(1, eGL_VERTEX_ATTRIB_ARRAY_ENABLED, &prevA1);
+  GL.glActiveTexture(eGL_TEXTURE0);
+  GL.glGetIntegerv(eGL_TEXTURE_BINDING_2D, &prevUnit0Tex2D);
+  GL.glGetIntegerv(eGL_TEXTURE_BINDING_EXTERNAL_OES, &prevUnit0TexExt);
+
+  GL.glViewport(0, 0, (GLsizei)w, (GLsizei)h);
+  GL.glDisable(eGL_BLEND);
+  GL.glDisable(eGL_DEPTH_TEST);
+  GL.glDisable(eGL_CULL_FACE);
+  GL.glDisable(eGL_SCISSOR_TEST);
+
+  GL.glActiveTexture(eGL_TEXTURE0);
+  GL.glBindTexture(eGL_TEXTURE_EXTERNAL_OES, externalName);
+  GL.glUseProgram(prog);
+  GL.glUniform1i(GL.glGetUniformLocation(prog, "uTex"), 0);
+  GL.glEnableVertexAttribArray(0);
+  GL.glVertexAttribPointer(0, 2, eGL_FLOAT, GL_FALSE, 16, (void *)0);
+  GL.glEnableVertexAttribArray(1);
+  GL.glVertexAttribPointer(1, 2, eGL_FLOAT, GL_FALSE, 16, (void *)(2 * sizeof(float)));
+
+  GL.glDrawArrays(eGL_TRIANGLES, 0, 3);
+
+  // restore GL state
+  GL.glActiveTexture(eGL_TEXTURE0);
+  GL.glBindTexture(eGL_TEXTURE_2D, prevUnit0Tex2D);
+  GL.glBindTexture(eGL_TEXTURE_EXTERNAL_OES, prevUnit0TexExt);
+  GL.glUseProgram(prevProgram);
+  GL.glBindBuffer(eGL_ARRAY_BUFFER, prevArrayBuf);
+  if(prevA0)
+    GL.glEnableVertexAttribArray(0);
+  else
+    GL.glDisableVertexAttribArray(0);
+  if(prevA1)
+    GL.glEnableVertexAttribArray(1);
+  else
+    GL.glDisableVertexAttribArray(1);
+  GL.glBindFramebuffer(eGL_DRAW_FRAMEBUFFER, prevDrawFBO);
+  GL.glBindFramebuffer(eGL_READ_FRAMEBUFFER, prevReadFBO);
+  GL.glViewport(prevViewport[0], prevViewport[1], prevViewport[2], prevViewport[3]);
+  if(prevBlend) GL.glEnable(eGL_BLEND);
+  if(prevDepth) GL.glEnable(eGL_DEPTH_TEST);
+  if(prevCull) GL.glEnable(eGL_CULL_FACE);
+  if(prevScissor) GL.glEnable(eGL_SCISSOR_TEST);
+  GL.glActiveTexture((RDCGLenum)prevActiveTex);
+
+  // cleanup transient GL objects
+  GL.glBindBuffer(eGL_ARRAY_BUFFER, 0);
+  GL.glDeleteBuffers(1, &vbo);
+  GL.glDeleteShader(vs);
+  GL.glDeleteShader(fs);
+  GL.glDeleteProgram(prog);
+  GL.glBindFramebuffer(eGL_FRAMEBUFFER, 0);
+  GL.glDeleteFramebuffers(1, &fbo);
+
+  ResourceId snapId = GetResourceManager()->RegisterResource(ResourceId(), TextureRes(GetCtx(), snap));
+  // ensure the snapshot has a record so it is tracked for persistency / initial contents
+  GetResourceManager()->AddResourceRecord(snapId);
+  m_ExternalOESSnapshot[externalId] = snapId;
+
+  // populate TextureData so the generic initial-contents path (glCopyImageSubData at frame-end)
+  // can snapshot the 2D texture's pixels into the capture file.
+  TextureData &sd = m_Textures[snapId];
+  sd.curType = eGL_TEXTURE_2D;
+  sd.internalFormat = eGL_RGBA8;
+  sd.width = w;
+  sd.height = h;
+  sd.depth = 1;
+  sd.dimension = 2;
+
+  return snapId;
+}
+
+ResourceId WrappedOpenGL::SnapshotEGLImage2DTexture(ResourceId eglImageId, GLuint eglImageName,
+                                                    uint32_t w, uint32_t h)
+{
+  // already captured this EGLImage texture? reuse the existing 2D snapshot.
+  auto it = m_EGLImage2DSnapshot.find(eglImageId);
+  if(it != m_EGLImage2DSnapshot.end())
+    return it->second;
+
+  // An OES_EGL_image-backed texture is only valid at the moment of the bind. By frame-end the
+  // EGLImage has typically been released/detached, so the deferred readback (glCopyImageSubData)
+  // would capture an empty texture. Instead we sample the bound texture into a plain 2D snapshot
+  // right now (the same mechanism the app itself uses to display it), and capture *that* snapshot's
+  // pixels at frame-end via the generic initial-contents path.
+  GLuint snap = 0;
+  GL.glGenTextures(1, &snap);
+  GL.glBindTexture(eGL_TEXTURE_2D, snap);
+  GL.glTexImage2D(eGL_TEXTURE_2D, 0, eGL_RGBA, (GLsizei)w, (GLsizei)h, 0, eGL_RGBA,
+                  eGL_UNSIGNED_BYTE, NULL);
+  GL.glTexParameteri(eGL_TEXTURE_2D, eGL_TEXTURE_MIN_FILTER, eGL_LINEAR);
+  GL.glTexParameteri(eGL_TEXTURE_2D, eGL_TEXTURE_MAG_FILTER, eGL_LINEAR);
+  GL.glTexParameteri(eGL_TEXTURE_2D, eGL_TEXTURE_WRAP_S, eGL_CLAMP_TO_EDGE);
+  GL.glTexParameteri(eGL_TEXTURE_2D, eGL_TEXTURE_WRAP_T, eGL_CLAMP_TO_EDGE);
+  GL.glBindTexture(eGL_TEXTURE_2D, 0);
+
+  GLuint fbo = 0;
+  GL.glGenFramebuffers(1, &fbo);
+  GL.glBindFramebuffer(eGL_FRAMEBUFFER, fbo);
+  GL.glFramebufferTexture2D(eGL_FRAMEBUFFER, eGL_COLOR_ATTACHMENT0, eGL_TEXTURE_2D, snap, 0);
+
+  // trivial copy program: fullscreen triangle, sample the EGLImage-backed 2D texture, output to the
+  // 2D FBO.
+  static const char *vss =
+      "attribute vec2 aPos;\n"
+      "attribute vec2 aUV;\n"
+      "varying vec2 vUV;\n"
+      "void main(){ vUV = aUV; gl_Position = vec4(aPos, 0.0, 1.0); }\n";
+  static const char *fss =
+      "precision mediump float;\n"
+      "uniform sampler2D uTex;\n"
+      "varying vec2 vUV;\n"
+      "void main(){ gl_FragColor = texture2D(uTex, vUV); }\n";
+
+  GLuint vs = GL.glCreateShader(eGL_VERTEX_SHADER);
+  GL.glShaderSource(vs, 1, &vss, NULL);
+  GL.glCompileShader(vs);
+  GLuint fs = GL.glCreateShader(eGL_FRAGMENT_SHADER);
+  GL.glShaderSource(fs, 1, &fss, NULL);
+  GL.glCompileShader(fs);
+  GLuint prog = GL.glCreateProgram();
+  GL.glAttachShader(prog, vs);
+  GL.glAttachShader(prog, fs);
+  GL.glBindAttribLocation(prog, 0, "aPos");
+  GL.glBindAttribLocation(prog, 1, "aUV");
+  GL.glLinkProgram(prog);
+
+  float verts[12] = {
+      -1.0f, -1.0f, 0.0f, 0.0f,
+      3.0f,  -1.0f, 2.0f, 0.0f,
+      -1.0f, 3.0f,  0.0f, 2.0f,
+  };
+
+  GLuint vbo = 0;
+  GL.glGenBuffers(1, &vbo);
+  GL.glBindBuffer(eGL_ARRAY_BUFFER, vbo);
+  GL.glBufferData(eGL_ARRAY_BUFFER, sizeof(verts), verts, eGL_STATIC_DRAW);
+
+  // save GL state we are about to disturb
+  GLint prevActiveTex = 0, prevProgram = 0, prevArrayBuf = 0;
+  GLint prevDrawFBO = 0, prevReadFBO = 0, prevUnit0Tex2D = 0;
+  GLint prevA0 = 0, prevA1 = 0;
+  GLint prevViewport[4] = {0, 0, 1, 1};
+  GLboolean prevBlend = GL.glIsEnabled(eGL_BLEND);
+  GLboolean prevDepth = GL.glIsEnabled(eGL_DEPTH_TEST);
+  GLboolean prevCull = GL.glIsEnabled(eGL_CULL_FACE);
+  GLboolean prevScissor = GL.glIsEnabled(eGL_SCISSOR_TEST);
+  GL.glGetIntegerv(eGL_ACTIVE_TEXTURE, &prevActiveTex);
+  GL.glGetIntegerv(eGL_CURRENT_PROGRAM, &prevProgram);
+  GL.glGetIntegerv(eGL_ARRAY_BUFFER_BINDING, &prevArrayBuf);
+  GL.glGetIntegerv(eGL_DRAW_FRAMEBUFFER_BINDING, &prevDrawFBO);
+  GL.glGetIntegerv(eGL_READ_FRAMEBUFFER_BINDING, &prevReadFBO);
+  GL.glGetIntegerv(eGL_VIEWPORT, prevViewport);
+  GL.glGetVertexAttribiv(0, eGL_VERTEX_ATTRIB_ARRAY_ENABLED, &prevA0);
+  GL.glGetVertexAttribiv(1, eGL_VERTEX_ATTRIB_ARRAY_ENABLED, &prevA1);
+  GL.glActiveTexture(eGL_TEXTURE0);
+  GL.glGetIntegerv(eGL_TEXTURE_BINDING_2D, &prevUnit0Tex2D);
+
+  GL.glViewport(0, 0, (GLsizei)w, (GLsizei)h);
+  GL.glDisable(eGL_BLEND);
+  GL.glDisable(eGL_DEPTH_TEST);
+  GL.glDisable(eGL_CULL_FACE);
+  GL.glDisable(eGL_SCISSOR_TEST);
+
+  GL.glActiveTexture(eGL_TEXTURE0);
+  GL.glBindTexture(eGL_TEXTURE_2D, eglImageName);
+  GL.glUseProgram(prog);
+  GL.glUniform1i(GL.glGetUniformLocation(prog, "uTex"), 0);
+  GL.glEnableVertexAttribArray(0);
+  GL.glVertexAttribPointer(0, 2, eGL_FLOAT, GL_FALSE, 16, (void *)0);
+  GL.glEnableVertexAttribArray(1);
+  GL.glVertexAttribPointer(1, 2, eGL_FLOAT, GL_FALSE, 16, (void *)(2 * sizeof(float)));
+
+  GL.glDrawArrays(eGL_TRIANGLES, 0, 3);
+
+  // restore GL state
+  GL.glActiveTexture(eGL_TEXTURE0);
+  GL.glBindTexture(eGL_TEXTURE_2D, prevUnit0Tex2D);
+  GL.glUseProgram(prevProgram);
+  GL.glBindBuffer(eGL_ARRAY_BUFFER, prevArrayBuf);
+  if(prevA0)
+    GL.glEnableVertexAttribArray(0);
+  else
+    GL.glDisableVertexAttribArray(0);
+  if(prevA1)
+    GL.glEnableVertexAttribArray(1);
+  else
+    GL.glDisableVertexAttribArray(1);
+  GL.glBindFramebuffer(eGL_DRAW_FRAMEBUFFER, prevDrawFBO);
+  GL.glBindFramebuffer(eGL_READ_FRAMEBUFFER, prevReadFBO);
+  GL.glViewport(prevViewport[0], prevViewport[1], prevViewport[2], prevViewport[3]);
+  if(prevBlend) GL.glEnable(eGL_BLEND);
+  if(prevDepth) GL.glEnable(eGL_DEPTH_TEST);
+  if(prevCull) GL.glEnable(eGL_CULL_FACE);
+  if(prevScissor) GL.glEnable(eGL_SCISSOR_TEST);
+  GL.glActiveTexture((RDCGLenum)prevActiveTex);
+
+  // cleanup transient GL objects
+  GL.glBindBuffer(eGL_ARRAY_BUFFER, 0);
+  GL.glDeleteBuffers(1, &vbo);
+  GL.glDeleteShader(vs);
+  GL.glDeleteShader(fs);
+  GL.glDeleteProgram(prog);
+  GL.glBindFramebuffer(eGL_FRAMEBUFFER, 0);
+  GL.glDeleteFramebuffers(1, &fbo);
+
+  ResourceId snapId = GetResourceManager()->RegisterResource(ResourceId(), TextureRes(GetCtx(), snap));
+  // ensure the snapshot has a record so it is tracked for persistency / initial contents
+  GetResourceManager()->AddResourceRecord(snapId);
+  m_EGLImage2DSnapshot[eglImageId] = snapId;
+
+  // populate TextureData so the generic initial-contents path (glCopyImageSubData at frame-end)
+  // can snapshot the 2D texture's pixels into the capture file.
+  TextureData &sd = m_Textures[snapId];
+  sd.curType = eGL_TEXTURE_2D;
+  sd.internalFormat = eGL_RGBA8;
+  sd.width = w;
+  sd.height = h;
+  sd.depth = 1;
+  sd.dimension = 2;
+
+  return snapId;
+}
+
+
+
+void WrappedOpenGL::glEGLImageTargetTexture2DOES(GLenum target, GLeglImageOES image)
+{
+  SERIALISE_TIME_CALL(GL.glEGLImageTargetTexture2DOES(target, image));
+
+
+  if(IsActiveCapturing(m_State))
+  {
+    GLResourceRecord *r = GetCtxData().GetActiveTexRecord(target);
+
+    // After the external bind, the texture currently bound to 'target' now aliases the
+    // EGLImage backing store. We capture the EGLImage's current contents into a plain 2D
+    // texture so replay has no external dependency (PrepareTextureInitialContents, called
+    // at frame-end for every referenced resource, does the actual GL-side readback for us).
+    //
+    // NOTE on the Android API path: the natural way to read an EGLImage back is via GL
+    // (glCopyImageSubData / FBO readback) once it is bound to a texture - there is no
+    // standard EGL call to recover the AHardwareBuffer from an existing EGLImage
+    // (eglGetNativeClientBufferANDROID goes the *other* way). So we snapshot through GL,
+    // which also keeps the code portable across desktop and Android GLES.
+    //
+    // OES_EGL_image_external (target == GL_TEXTURE_EXTERNAL_OES) is handled too: an external
+    // texture cannot be attached to an FBO nor read back directly, so SnapshotExternalOESTexture
+    // samples it with a trivial shader and renders into a plain 2D snapshot. At replay the
+    // shaders that sample it (samplerExternalOES) are rewritten to sampler2D and bound to that
+    // snapshot, so there is no external dependency (see Serialise_glShaderSource).
+
+    if(r && (target == eGL_TEXTURE_2D || target == eGL_TEXTURE_EXTERNAL_OES))
+    {
+      ResourceId texId = r->GetResourceID();
+      GLResource res = r->Resource;
+
+      // Apps frequently call glEGLImageTargetTexture2DOES without first allocating storage via
+      // glTexImage2D/glTexStorage, so query the level-0 dimensions/format from the now-bound
+      // EGLImage-backed texture.
+      GLenum binding = TextureBinding(target);
+      GLuint oldtex = 0;
+      GL.glGetIntegerv(binding, (GLint *)&oldtex);
+      GL.glBindTexture(target, res.name);
+
+      GLint w = 1, h = 1, d = 1, fmt = (GLint)eGL_RGBA8;
+      GL.glGetTexLevelParameteriv(target, 0, eGL_TEXTURE_WIDTH, &w);
+      GL.glGetTexLevelParameteriv(target, 0, eGL_TEXTURE_HEIGHT, &h);
+      GL.glGetTexLevelParameteriv(target, 0, eGL_TEXTURE_DEPTH, &d);
+      GL.glGetTexLevelParameteriv(target, 0, eGL_TEXTURE_INTERNAL_FORMAT, &fmt);
+
+      GL.glBindTexture(target, oldtex);
+
+      TextureData &details = m_Textures[texId];
+      if(details.internalFormat == eGL_NONE)
+      {
+        details.curType = target;
+        details.internalFormat = (GLenum)fmt;
+        details.width = (uint32_t)RDCMAX(w, 1);
+        details.height = (uint32_t)RDCMAX(h, 1);
+        details.depth = (uint32_t)RDCMAX(d, 1);
+        details.dimension = 2;
+      }
+
+      if(target == eGL_TEXTURE_EXTERNAL_OES)
+      {
+        // OES_EGL_image_external: the external texture itself cannot be read back / attached to an
+        // FBO, so capture its current contents into a plain 2D snapshot texture. The shaders that
+        // sample it (via samplerExternalOES) are rewritten to sampler2D at replay.
+        ResourceId snapId =
+            SnapshotExternalOESTexture(texId, res.name, details.width, details.height);
+        GetResourceManager()->MarkResourceFrameReferenced(snapId, eFrameRef_Read);
+      }
+      else
+      {
+        // OES_EGL_image (2D): the EGLImage is only valid at the moment of the bind, so snapshot its
+        // contents immediately into a plain 2D texture instead of relying on the deferred frame-end
+        // readback (which would capture an empty / black texture once the EGLImage is detached).
+        ResourceId snapId =
+            SnapshotEGLImage2DTexture(texId, res.name, details.width, details.height);
+        GetResourceManager()->MarkResourceFrameReferenced(snapId, eFrameRef_Read);
+      }
+    }
+
+
+    Chunk *chunk = NULL;
+
+    {
+      USE_SCRATCH_SERIALISER();
+      SCOPED_SERIALISE_CHUNK(gl_CurChunk);
+      Serialise_glEGLImageTargetTexture2DOES(ser, target, image);
+
+      chunk = scope.Get();
+    }
+
+    GetContextRecord()->AddChunk(chunk);
+  }
+}
+
+template <typename SerialiserType>
+bool WrappedOpenGL::Serialise_glEGLImageTargetTexture2DOES(SerialiserType &ser, GLenum target,
+                                                           GLeglImageOES image)
+{
+  SERIALISE_ELEMENT(target);
+
+  // The EGLImage handle is opaque and process-local; on replay it is meaningless. Instead
+  // serialise the ResourceId of the texture that the EGLImage is bound to, which at replay
+  // time refers to the plain 2D snapshot captured at frame-end.
+  ResourceId texId = GetCtxData().GetActiveTexRecord(target)
+                         ? GetCtxData().GetActiveTexRecord(target)->GetResourceID()
+                         : ResourceId();
+  SERIALISE_ELEMENT(texId).TypedAs("GLResource"_lit);
+
+  // The 2D snapshot to bind at replay instead of re-issuing the external bind. For both the 2D
+  // (OES_EGL_image) and external (OES_EGL_image_external) cases this is the plain 2D snapshot
+  // texture produced at capture time (SnapshotEGLImage2DTexture / SnapshotExternalOESTexture);
+  // it is never texId itself, because the EGLImage is no longer valid at replay.
+  ResourceId snapshotId = texId;
+  if(ser.IsWriting())
+  {
+    if(target == eGL_TEXTURE_EXTERNAL_OES)
+      snapshotId = m_ExternalOESSnapshot[texId];
+    else
+      snapshotId = m_EGLImage2DSnapshot[texId];
+  }
+  SERIALISE_ELEMENT(snapshotId).TypedAs("GLResource"_lit);
+
+  // The texture unit the app had this texture bound to, so replay binds the 2D snapshot to the
+  // same unit (as a GL_TEXTURE_2D binding) the original external-OES binding occupied.
+  GLint activeUnit = GetCtxData().m_TextureUnit;
+  SERIALISE_ELEMENT(activeUnit);
+
+  SERIALISE_CHECK_READ_ERRORS();
+
+  if(IsReplayingAndReading())
+  {
+    // Do NOT re-issue the external bind. Just bind the captured 2D snapshot (as a plain 2D
+    // texture) to the unit the external texture was bound to, so subsequent sampling via the
+    // rewritten sampler2D works with no external dependency.
+    if(snapshotId != ResourceId())
+    {
+      GLResource snapRes = GetResourceManager()->GetResource(snapshotId);
+      if(snapRes.name != 0)
+      {
+        GLint prevActive = 0;
+        GL.glGetIntegerv(eGL_ACTIVE_TEXTURE, &prevActive);
+        GL.glActiveTexture((RDCGLenum)activeUnit);
+        GL.glBindTexture(eGL_TEXTURE_2D, snapRes.name);
+        GL.glActiveTexture((RDCGLenum)prevActive);
+      }
+    }
+    else
+    {
+      RDCDEBUG("Replay of glEGLImageTargetTexture2DOES with no snapshot; skipping external bind");
+    }
+  }
+
+  return true;
+}
+
+
 template <typename SerialiserType>
 bool WrappedOpenGL::Serialise_glBindTextures(SerialiserType &ser, GLuint first, GLsizei count,
                                              const GLuint *textureHandles)
@@ -7377,6 +7837,8 @@ void WrappedOpenGL::glTextureFoveationParametersQCOM(GLuint texture, GLuint laye
 INSTANTIATE_FUNCTION_SERIALISED(void, glGenTextures, GLsizei n, GLuint *textures);
 INSTANTIATE_FUNCTION_SERIALISED(void, glCreateTextures, GLenum target, GLsizei n, GLuint *textures);
 INSTANTIATE_FUNCTION_SERIALISED(void, glBindTexture, GLenum target, GLuint texture);
+INSTANTIATE_FUNCTION_SERIALISED(void, glEGLImageTargetTexture2DOES, GLenum target,
+                                GLeglImageOES image);
 INSTANTIATE_FUNCTION_SERIALISED(void, glBindTextures, GLuint first, GLsizei count,
                                 const GLuint *textures);
 INSTANTIATE_FUNCTION_SERIALISED(void, glBindMultiTextureEXT, GLenum texunit, GLenum target,

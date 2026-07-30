@@ -760,6 +760,11 @@ public:
     // used if the application uploaded GLSL but we were able to compile to SPIR-V
     bool convertedSPIRV = false;
     bool convertedAutomapped = false;
+
+    // set when this shader's source was rewritten at replay time from samplerExternalOES to
+    // sampler2D, because it sampled an OES_EGL_image_external texture we captured as a 2D snapshot.
+    bool externalOESRewritten = false;
+
     rdcarray<uint32_t> convertedSpirvWords;
     SPIRVPatchData convertedPatchData;
     ShaderReflection convertedRefl;
@@ -914,6 +919,17 @@ public:
 
   std::map<ResourceId, TextureData> m_Textures;
 
+  // maps an OES_EGL_image_external (GL_TEXTURE_EXTERNAL_OES) texture ResourceId to the plain 2D
+  // texture ResourceId we capture its contents into, so replay can bind the 2D snapshot instead of
+  // re-issuing the external bind.
+  std::map<ResourceId, ResourceId> m_ExternalOESSnapshot;
+
+  // maps an OES_EGL_image (GL_TEXTURE_2D) texture ResourceId to the plain 2D snapshot ResourceId we
+  // capture its contents into *at the moment of the bind* (the EGLImage is only valid then, so the
+  // deferred frame-end readback would capture an empty/black texture).
+  std::map<ResourceId, ResourceId> m_EGLImage2DSnapshot;
+
+
   IMPLEMENT_FUNCTION_SERIALISED(void, glBindTexture, GLenum target, GLuint texture);
   IMPLEMENT_FUNCTION_SERIALISED(void, glBindTextures, GLuint first, GLsizei count,
                                 const GLuint *textures);
@@ -921,6 +937,25 @@ public:
                                 GLboolean layered, GLint layer, GLenum access, GLenum format);
   IMPLEMENT_FUNCTION_SERIALISED(void, glBindImageTextures, GLuint first, GLsizei count,
                                 const GLuint *textures);
+  // Capture an OES_EGL_image_external (GL_TEXTURE_EXTERNAL_OES) texture into a plain 2D texture.
+  // An external texture can't be attached to an FBO nor read back directly, so we sample it with a
+  // trivial shader and render into a 2D colour attachment. Returns the ResourceId of the 2D
+  // snapshot (creating it once per external texture).
+  ResourceId SnapshotExternalOESTexture(ResourceId externalId, GLuint externalName, uint32_t w,
+                                        uint32_t h);
+
+  // OES_EGL_image (GL_TEXTURE_2D): the EGLImage is only valid at the moment of the bind, so we
+  // sample the bound texture into a plain 2D snapshot immediately (same trick as the external path)
+  // and capture *that* snapshot's contents at frame-end. Returns the 2D snapshot ResourceId.
+  ResourceId SnapshotEGLImage2DTexture(ResourceId eglImageId, GLuint eglImageName, uint32_t w,
+                                       uint32_t h);
+
+  // EGLImage (OES_EGL_image / OES_EGL_image_external) -> 2D texture bridge. On capture we forward
+  // the call and record the bound texture as externally-backed; the replay path will substitute a
+  // plain 2D texture snapshot instead of re-issuing the external bind.
+  IMPLEMENT_FUNCTION_SERIALISED(void, glEGLImageTargetTexture2DOES, GLenum target,
+                                GLeglImageOES image);
+
   IMPLEMENT_FUNCTION_SERIALISED(void, glBlendFunc, GLenum sfactor, GLenum dfactor);
   IMPLEMENT_FUNCTION_SERIALISED(void, glBlendFunci, GLuint buf, GLenum sfactor, GLenum dfactor);
   IMPLEMENT_FUNCTION_SERIALISED(void, glBlendColor, GLfloat red, GLfloat green, GLfloat blue,

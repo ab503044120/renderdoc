@@ -53,6 +53,7 @@ struct GLDispatchTable
   // will be returned and used.
   
   PFNGLBINDTEXTUREPROC glBindTexture;
+  PFNGLEGLIMAGETARGETTEXTURE2DOESPROC glEGLImageTargetTexture2DOES;
   PFNGLBLENDFUNCPROC glBlendFunc;
   PFNGLCLEARPROC glClear;
   PFNGLCLEARCOLORPROC glClearColor;
