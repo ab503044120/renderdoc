@@ -39,6 +39,7 @@ class QSpacerItem;
 class QToolButton;
 class QTimer;
 class QTextStream;
+class QComboBox;
 class FlowLayout;
 struct EventItemTag;
 class RDLabel;
@@ -192,6 +193,7 @@ private slots:
   void locationEdit_clicked();
   void location_leave();
   void location_keyPress(QKeyEvent *e);
+  void on_contextSpinner_currentIndexChanged(int index);
 
 private:
   void ExpandNode(QModelIndex idx);
@@ -269,6 +271,14 @@ private:
   RDTextEdit *m_CurrentFilterText;
 
   void RefreshShaderMessages();
+
+  void BuildContextMapping();
+  void PopulateContextSpinner();
+
   Ui::EventBrowser *ui;
   ICaptureContext &m_Ctx;
+
+  // EID -> context ResourceId mapping (built from ContextConfiguration chunks)
+  rdcarray<ResourceId> m_EIDToContext;
+  rdcarray<ResourceId> m_ContextList;
 };

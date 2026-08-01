@@ -1475,7 +1475,9 @@ struct BuiltinFilterCallbacks
 struct EventFilterModel : public QSortFilterProxyModel
 {
 public:
-  EventFilterModel(EventItemModel *model, ICaptureContext &ctx) : m_Model(model), m_Ctx(ctx)
+  EventFilterModel(EventItemModel *model, ICaptureContext &ctx,
+                   const rdcarray<ResourceId> *eidToContext = NULL)
+      : m_Model(model), m_Ctx(ctx), m_EIDToContext(eidToContext)
   {
     setSourceModel(m_Model);
 
@@ -1502,6 +1504,7 @@ public:
       MAKE_BUILTIN_FILTER(childOf);
       MAKE_BUILTIN_FILTER(parent);
       MAKE_BUILTIN_FILTER(annot);
+      MAKE_BUILTIN_FILTER(glctx);
 
       /*
       m_BuiltinFilters[lit("event")].completer = [this](ICaptureContext *ctx, QString name,
@@ -1600,8 +1603,41 @@ public:
   }
 
 protected:
+  bool HasMustMatchFilters() const
+  {
+    for(const EventFilter &f : m_Filters)
+      if(f.type == MatchType::MustMatch)
+        return true;
+    return false;
+  }
+
   virtual bool filterAcceptsRow(int source_row, const QModelIndex &source_parent) const override
   {
+    // If we have MustMatch filters (+ prefix), do strict filtering:
+    // A node with children is shown ONLY if at least one child passes the filter.
+    // A leaf node is shown only if it itself passes.
+    // This prevents markers like "Colour Pass" from appearing when none of their
+    // drawcalls belong to the selected context.
+    if(HasMustMatchFilters())
+    {
+      QModelIndex idx = sourceModel()->index(source_row, 0, source_parent);
+      int rowCount = sourceModel()->rowCount(idx);
+
+      if(rowCount > 0)
+      {
+        // This is a parent node (has children). Show it only if it has matching children.
+        for(int i = 0; i < rowCount; i++)
+          if(filterAcceptsRow(i, idx))
+            return true;
+        return false;
+      }
+      else
+      {
+        // Leaf node - use its own filter result
+        return filterAcceptsSingleRow(source_row, source_parent);
+      }
+    }
+
     // manually implement recursive filtering since older Qt versions don't support it
     if(filterAcceptsSingleRow(source_row, source_parent))
       return true;
@@ -1667,6 +1703,9 @@ private:
   mutable rdcarray<int8_t> m_VisibleCache;
 
   EventItemModel *m_Model = NULL;
+
+  // pointer to EID->context ResourceId mapping (owned by EventBrowser)
+  const rdcarray<ResourceId> *m_EIDToContext = NULL;
 
   bool m_EmptyRegionsVisible = true;
   rdcarray<EventFilter> m_Filters;
@@ -2175,6 +2214,63 @@ and vice-versa.
         }
       }
       return false;
+    };
+  }
+
+  QString filterDescription_glctx() const
+  {
+    return tr(R"EOD(
+<h3>$glctx</h3>
+
+<br />
+<table>
+<tr><td><code>$glctx(resourceId)</code></td><td> - passes if an event belongs to the specified GL context.</td></tr>
+</table>
+
+<p>
+This filter checks whether an event was captured in the specified GL context. The context is
+identified by its ResourceId (e.g. <code>$glctx(0x12345678)</code>).
+</p>
+
+<p>
+Use the context spinner in the filter strip to select from available contexts.
+</p>
+)EOD",
+              "EventFilterModel");
+  }
+
+  rdcarray<rdcstr> filterCompleter_glctx(ICaptureContext *ctx, const rdcstr &name,
+                                         const rdcstr &params)
+  {
+    // no special completion for glctx - context IDs are too varied
+    return {};
+  }
+
+  IEventBrowser::EventFilterCallback filterFunction_glctx(QString name, QString parameters,
+                                                          ParseTrace &trace)
+  {
+    // $glctx(resourceId) => returns true only if the event belongs to the specified GL context
+    // We compare by ToStr(ResourceId) string to avoid needing ResourceId construction
+    // Use the entire trimmed parameter as-is (ToStr(ResourceId) contains "::" which tokenise splits)
+    QString targetCtxStr = parameters.trimmed();
+
+    if(targetCtxStr.isEmpty())
+    {
+      trace.setError(tr("$glctx() requires a context ResourceId", "EventFilterModel"));
+      return NULL;
+    }
+
+    const rdcarray<ResourceId> *eidToContext = m_EIDToContext;
+
+    return [targetCtxStr, eidToContext](ICaptureContext *, const rdcstr &, const rdcstr &,
+                                        uint32_t eventId, const SDChunk *,
+                                        const ActionDescription *, const rdcstr &) {
+      if(!eidToContext || eventId >= eidToContext->size())
+        return true;
+      ResourceId ctx = (*eidToContext)[eventId];
+      if(ctx == ResourceId())
+        return true;
+      return ToStr(ctx) == rdcstr(targetCtxStr);
     };
   }
 
@@ -3776,7 +3872,7 @@ EventBrowser::EventBrowser(ICaptureContext &ctx, QWidget *parent)
   clearBookmarks();
 
   m_Model = new EventItemModel(ui->events, m_Ctx);
-  m_FilterModel = new EventFilterModel(m_Model, m_Ctx);
+  m_FilterModel = new EventFilterModel(m_Model, m_Ctx, &m_EIDToContext);
 
   ui->events->setModel(m_FilterModel);
 
@@ -4061,6 +4157,10 @@ void EventBrowser::OnCaptureLoaded()
   m_Model->ResetModel();
   setPersistData(p);
 
+  // build EID -> GL context mapping and populate the context spinner
+  BuildContextMapping();
+  PopulateContextSpinner();
+
   // expand the root frame node
   ui->events->expand(ui->events->model()->index(0, 0));
 
@@ -4110,6 +4210,148 @@ void EventBrowser::OnCaptureClosed()
   ui->exportActions->setEnabled(false);
   ui->stepPrev->setEnabled(false);
   ui->stepNext->setEnabled(false);
+
+  // clear context mapping and spinner
+  m_EIDToContext.clear();
+  m_ContextList.clear();
+  ui->contextSpinner->clear();
+  ui->contextSpinner->setEnabled(false);
+}
+
+void EventBrowser::BuildContextMapping()
+{
+  m_EIDToContext.clear();
+  m_ContextList.clear();
+
+  if(!m_Ctx.IsCaptureLoaded())
+    return;
+
+  const SDFile &sdfile = m_Ctx.GetStructuredFile();
+  const rdcarray<ActionDescription> &rootActions = m_Ctx.CurRootActions();
+  rdcarray<ResourceId> contextSeen;
+
+  // Step 1: Scan chunks linearly to build chunkIndex -> current context mapping.
+  // This is the correct way because chunk order = execution order.
+  int totalChunks = (int)sdfile.chunks.size();
+  rdcarray<ResourceId> chunkCtx;
+  chunkCtx.resize(totalChunks);
+  ResourceId currentCtx;
+
+  for(int i = 0; i < totalChunks; i++)
+  {
+    const SDChunk *c = sdfile.chunks[i];
+    if(c && (c->name == "Internal::Context Configuration"_lit ||
+             c->name == "Internal::Implicit thread context-switch"_lit))
+    {
+      const SDObject *ctxObj = c->FindChild("Context"_lit);
+      if(ctxObj && ctxObj->type.basetype == SDBasic::Resource)
+      {
+        currentCtx = ctxObj->data.basic.id;
+
+        bool seen = false;
+        for(const ResourceId &r : contextSeen)
+          if(r == currentCtx)
+            seen = true;
+        if(!seen)
+          contextSeen.push_back(currentCtx);
+      }
+    }
+    chunkCtx[i] = currentCtx;
+  }
+
+  // Step 2: Map each EID to its context by looking up chunkCtx[chunkIndex]
+  std::function<void(const rdcarray<ActionDescription> &)> mapActions =
+      [&](const rdcarray<ActionDescription> &actions) {
+        for(const ActionDescription &a : actions)
+        {
+          for(const APIEvent &e : a.events)
+          {
+            if(e.chunkIndex != APIEvent::NoChunk && (int)e.chunkIndex < totalChunks)
+            {
+              m_EIDToContext.resize_for_index(e.eventId);
+              m_EIDToContext[e.eventId] = chunkCtx[e.chunkIndex];
+            }
+          }
+
+          if(!a.children.empty())
+            mapActions(a.children);
+        }
+      };
+
+  mapActions(rootActions);
+
+  m_ContextList = contextSeen;
+}
+
+void EventBrowser::PopulateContextSpinner()
+{
+  QSignalBlocker blocker(ui->contextSpinner);
+  ui->contextSpinner->clear();
+
+  if(m_ContextList.empty())
+  {
+    ui->contextSpinner->addItem(tr("(no contexts)"));
+    ui->contextSpinner->setEnabled(false);
+    return;
+  }
+
+  ui->contextSpinner->addItem(tr("(all contexts)"), QString());
+
+  for(size_t i = 0; i < m_ContextList.size(); i++)
+  {
+    QString label = ToStr(m_ContextList[i]);
+    ui->contextSpinner->addItem(label, label);
+  }
+
+  ui->contextSpinner->setEnabled(true);
+  ui->contextSpinner->setCurrentIndex(0);
+}
+
+void EventBrowser::on_contextSpinner_currentIndexChanged(int index)
+{
+  if(index < 0)
+    return;
+
+  QString ctxStr = ui->contextSpinner->itemData(index).toString();
+
+  // regex to match +$glctx(...) or $glctx(...) with optional leading whitespace
+  QRegularExpression glctxRe(lit("\\+?\\s*\\$glctx\\s*\\([^)]*\\)\\s*"));
+
+  if(ctxStr.isEmpty())
+  {
+    // "(all contexts)" selected - remove any $glctx() from filter expression
+    QString text = ui->filterExpression->toPlainText().trimmed();
+    text = text.replace(glctxRe, QString());
+    text = text.trimmed();
+    ui->filterExpression->setPlainText(text);
+  }
+  else
+  {
+    // Use + prefix for MustMatch so it ANDs with other filters
+    QString glctxExpr = QFormatStr("+$glctx(%1)").arg(ctxStr);
+
+    QString text = ui->filterExpression->toPlainText().trimmed();
+
+    // Replace existing $glctx() (with or without + prefix)
+    text = text.replace(glctxRe, QString());
+    text = text.trimmed();
+
+    // When using MustMatch (+glctx), also promote other unprefixed filters to MustMatch
+    // so they AND together. A bare "$action()" would be ignored when MustMatch exists.
+    // Convert " $foo(" to " +$foo(" for any unprefixed $function
+    QRegularExpression unprefixedRe(lit("(^|\\s)(?![\\+\\-])(\\$\\w+\\s*\\()"));
+    text = text.replace(unprefixedRe, lit("\\1+\\2"));
+
+    if(text.isEmpty())
+      text = glctxExpr;
+    else
+      text = text + lit(" ") + glctxExpr;
+
+    ui->filterExpression->setPlainText(text);
+  }
+
+  // trigger filter re-apply
+  filter_apply();
 }
 
 void EventBrowser::OnEventChanged(uint32_t eventId)

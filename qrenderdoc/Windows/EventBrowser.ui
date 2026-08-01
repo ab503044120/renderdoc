@@ -371,6 +371,22 @@
         </property>
        </widget>
       </item>
+      <item>
+       <widget class="QComboBox" name="contextSpinner">
+        <property name="minimumSize">
+         <size>
+          <width>0</width>
+          <height>20</height>
+         </size>
+        </property>
+        <property name="toolTip">
+         <string>Filter by GL Context</string>
+        </property>
+        <property name="sizeAdjustPolicy">
+         <enum>QComboBox::AdjustToContents</enum>
+        </property>
+       </widget>
+      </item>
      </layout>
     </widget>
    </item>
