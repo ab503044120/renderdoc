@@ -1391,6 +1391,20 @@ bool GLResourceManager::Serialise_InitialState(SerialiserType &ser, ResourceId i
     {
       WrappedOpenGL::TextureData &details = m_Driver->m_Textures[id];
 
+      // Restore width/height/depth from the serialised state. For textures that only go through
+      // the initial-contents path (e.g. OES external texture snapshots), no subsequent chunk will
+      // set these fields, so we must restore them here.
+      if(IsReplayingAndReading())
+      {
+        details.width = TextureState.width;
+        details.height = TextureState.height;
+        details.depth = TextureState.depth;
+        details.samples = TextureState.samples;
+        details.dimension = TextureState.dim;
+        details.internalFormat = TextureState.internalformat;
+        details.curType = TextureState.type;
+      }
+
       if(TextureState.type == eGL_TEXTURE_BUFFER || TextureState.isView)
       {
         // no contents to copy for texture buffer (it's copied under the buffer)
@@ -1956,6 +1970,44 @@ void GLResourceManager::Apply_InitialState(GLResource res, GLInitialContents &in
       if(initial.resource != GLResource(MakeNullResource) && tex != 0)
       {
         int mips = GetNumMips(details.curType, tex, details.width, details.height, details.depth);
+
+        // If the target texture has no storage allocated (e.g. OES snapshot textures created via
+        // glGenTextures + glBindTexture only, without a glTexImage2D chunk), allocate it now so
+        // that glCopyImageSubData has a valid destination. Check via glGetTexLevelParameteriv:
+        // a texture with storage reports non-zero width at level 0.
+        {
+          GLint existingWidth = 0;
+          GLenum levelQueryType = details.curType;
+          if(levelQueryType == eGL_TEXTURE_CUBE_MAP)
+            levelQueryType = eGL_TEXTURE_CUBE_MAP_POSITIVE_X;
+          GL.glGetTextureLevelParameterivEXT(res.name, levelQueryType, 0, eGL_TEXTURE_WIDTH,
+                                            &existingWidth);
+          if(existingWidth == 0 && details.width > 0 && details.internalFormat != eGL_NONE)
+          {
+            // Allocate immutable storage with 1 mip level via glTextureStorage2DEXT (or the
+            // appropriate variant for the texture type).
+            if(details.curType == eGL_TEXTURE_2D)
+              GL.glTextureStorage2DEXT(res.name, details.curType, mips, details.internalFormat,
+                                       details.width, details.height);
+            else if(details.curType == eGL_TEXTURE_2D_ARRAY)
+              GL.glTextureStorage3DEXT(res.name, details.curType, mips, details.internalFormat,
+                                       details.width, details.height, details.depth);
+            else if(details.curType == eGL_TEXTURE_3D)
+              GL.glTextureStorage3DEXT(res.name, details.curType, mips, details.internalFormat,
+                                       details.width, details.height, details.depth);
+            else if(details.curType == eGL_TEXTURE_CUBE_MAP)
+              GL.glTextureStorage2DEXT(res.name, details.curType, mips, details.internalFormat,
+                                       details.width, details.height);
+            else if(details.curType == eGL_TEXTURE_1D)
+              GL.glTextureStorage1DEXT(res.name, details.curType, mips, details.internalFormat,
+                                       details.width);
+            else if(details.curType == eGL_TEXTURE_1D_ARRAY)
+              GL.glTextureStorage2DEXT(res.name, details.curType, mips, details.internalFormat,
+                                       details.width, details.height);
+            // Other types (RECTANGLE, CUBE_MAP_ARRAY, etc.) are not expected for OES snapshots,
+            // so skip allocation for them.
+          }
+        }
 
         // we need to set maxlevel appropriately for number of mips to force the texture to be
         // complete. This can happen if e.g. a texture is initialised just by default with

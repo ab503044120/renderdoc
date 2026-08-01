@@ -967,6 +967,9 @@ struct GLDispatchTable
   PFNWGLDXOBJECTACCESSNVPROC wglDXObjectAccessNV;
   PFNWGLDXLOCKOBJECTSNVPROC wglDXLockObjectsNV;
   PFNWGLDXUNLOCKOBJECTSNVPROC wglDXUnlockObjectsNV;
+
+  // OES external texture capture (Android). See gen/renderdoc/oes_external_texture_capture.md.
+  PFNGLEGLIMAGETARGETTEXTURE2DOESPROC glEGLImageTargetTexture2DOES;
 };
 // clang-format on
 

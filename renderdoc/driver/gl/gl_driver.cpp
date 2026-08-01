@@ -1000,6 +1000,19 @@ WrappedOpenGL::~WrappedOpenGL()
 
   RenderDoc::Inst().UnregisterMemoryRegion(this);
 
+#if ENABLED(RDOC_ANDROID)
+  // Shut down the OES capture thread before destroying the rest of the driver.
+  if(m_CaptureThread.joinable())
+  {
+    {
+      std::lock_guard<std::mutex> lock(m_CaptureJobMutex);
+      m_CaptureThreadExit = true;
+    }
+    m_CaptureJobSubmitCV.notify_one();
+    m_CaptureThread.join();
+  }
+#endif
+
   delete m_Replay;
 }
 
@@ -2266,6 +2279,11 @@ void WrappedOpenGL::StartFrameCapture(DeviceOwnedWindow devWnd)
   GetResourceManager()->PrepareInitialContents();
 
   FreeCaptureData();
+
+  // Clear per-frame OES external texture dedupe cache so the next frame re-captures.
+#if ENABLED(RDOC_ANDROID)
+  m_ExternalOESSnapshot.clear();
+#endif
 
   AttemptCapture();
   BeginCaptureFrame();
@@ -5206,6 +5224,11 @@ bool WrappedOpenGL::ProcessChunk(ReadSerialiser &ser, GLChunk chunk)
     case GLChunk::glGetPerfQueryDataINTEL:
     case GLChunk::glGetPerfQueryIdByNameINTEL:
     case GLChunk::glGetPerfQueryInfoINTEL:
+
+#if ENABLED(RDOC_ANDROID)
+    case GLChunk::glEGLImageTargetTexture2DOES:
+      return Serialise_glEGLImageTargetTexture2DOES(ser, eGL_NONE, NULL);
+#endif
 
     case GLChunk::Max:
       RDCERR("Unexpected chunk %s, or missing case for processing! Skipping...",

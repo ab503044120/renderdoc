@@ -35,6 +35,12 @@
 #include "gl_renderstate.h"
 #include "gl_resources.h"
 
+#include <mutex>
+#include <thread>
+#include <condition_variable>
+
+
+
 class GLReplay;
 
 namespace glslang
@@ -533,7 +539,7 @@ private:
 
   private:
     // kept private to force everyone through accessors above
-    GLResourceRecord *m_TextureRecord[11][256];
+    GLResourceRecord *m_TextureRecord[12][256];
   };
 
   struct ClientMemoryData
@@ -911,6 +917,86 @@ public:
   };
 
   std::map<ResourceId, TextureData> m_Textures;
+
+#if ENABLED(RDOC_ANDROID)
+  // OES external texture capture state. See gen/renderdoc/oes_external_texture_capture.md.
+  // Three-stage association: AHW<->CB (eglGetNativeClientBufferANDROID),
+  // Image<->CB (eglCreateImageKHR), then image->AHW at glEGLImageTargetTexture2DOES time.
+  std::map<const void *, EGLClientBuffer> m_AHWToCB;
+  std::map<EGLClientBuffer, const void *> m_CBToAHW;
+  std::map<EGLImageKHR, EGLClientBuffer> m_ImageToCB;
+
+  // Java SurfaceTexture path never calls eglGetNativeClientBufferANDROID, so the CB map stays
+  // empty. ANativeWindowBuffer and AHardwareBuffer differ by this fixed offset (empirical,
+  // validated on Xiaomi/OPPO/vivo Android 9+). Calibrated at runtime via ResolveAHardwareBuffer
+  // whenever Path 1 (map lookup) succeeds; updated value is used by Path 2 (SurfaceTexture fallback).
+  int64_t g_ClientBufferToAHBOffset = 0x10;
+
+  // external OES ResourceId -> captured RGBA snapshot ResourceId
+  std::map<ResourceId, ResourceId> m_ExternalOESSnapshot;
+
+  // snapId computed during capture of glEGLImageTargetTexture2DOES, passed into the Serialise call
+  // via SERIALISE_ELEMENT_LOCAL (the hook signature can't carry it).
+  ResourceId m_OESCurrentSnapId = ResourceId();
+
+  // One-shot sampling job submitted by the caller, fulfilled by the worker thread.
+  // Public so the anonymous-namespace worker function can name the type.
+  struct OESSampleJob
+  {
+    EGLImageKHR image = EGL_NO_IMAGE_KHR;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    byte *pixels = NULL;          // filled by worker, freed by caller
+    bool done = false;
+    bool success = false;
+  };
+  // Dedicated thread + EGL context used to sample non-RGBA_8888 EXTERNAL_OES textures into RGBA.
+  // The worker thread owns its own EGL context (pbuffer surface) so it can issue GL commands
+  // independently of the application's render thread; the caller submits a job and blocks on a
+  // future until the worker returns the captured RGBA buffer.
+  std::mutex m_CaptureMutex;
+  std::condition_variable m_CaptureCV;
+  std::mutex m_CaptureQueueMutex;
+  bool m_CaptureThreadInit = false;
+  bool m_CaptureThreadExit = false;
+  std::thread m_CaptureThread;
+  EGLDisplay m_CaptureDisplay = EGL_NO_DISPLAY;
+  EGLContext m_CaptureContext = EGL_NO_CONTEXT;
+  EGLContext m_CaptureShareContext = EGL_NO_CONTEXT;  // share group from caller's context
+  EGLConfig m_CaptureConfig = NULL;                    // chosen by caller, used by worker
+  EGLSurface m_CaptureSurface = EGL_NO_SURFACE;
+
+  OESSampleJob m_CaptureJob;
+  std::mutex m_CaptureJobMutex;
+  std::condition_variable m_CaptureJobSubmitCV;     // caller -> worker: new job ready
+  std::condition_variable m_CaptureJobDoneCV;       // worker -> caller: job completed
+
+  // Guard so the offscreen sampling path does not recursively trigger another OES capture.
+  bool m_InOESSample = false;
+#endif
+
+  // OES external texture capture (Android only). EXTERNAL_OES textures are storageless and
+  // cannot be queried for size via glGetTexLevelParameteriv, so we resolve size/pixels from the
+  // underlying AHardwareBuffer by walking the EGLImageKHR -> EGLClientBuffer -> AHardwareBuffer
+  // chain. See gen/renderdoc/oes_external_texture_capture.md.
+#if ENABLED(RDOC_ANDROID)
+  IMPLEMENT_FUNCTION_SERIALISED(void, glEGLImageTargetTexture2DOES, GLenum target,
+                                GLeglImageOES image);
+
+  // Called from the EGL hook layer to keep the AHW<->CB<->Image maps populated.
+  void CaptureHook_eglGetNativeClientBufferANDROID(const void *buffer, EGLClientBuffer cb);
+  void CaptureHook_eglCreateImage(EGLenum target, EGLClientBuffer buffer, EGLImageKHR image);
+
+  // Resolve the AHardwareBuffer backing an EGLImage (map first, offset fallback for
+  // Java SurfaceTexture path where the framework never calls eglGetNativeClientBufferANDROID).
+  void *ResolveAHardwareBuffer(EGLImageKHR image);
+
+  // Capture pixels of an EXTERNAL_OES texture into an RGBA snapshot, returns its ResourceId.
+  ResourceId CaptureExternalOESPixels(EGLImageKHR image, ResourceId externalId, GLuint externalName);
+
+  // Replay: rebuild a real EXTERNAL_OES texture from the captured RGBA snapshot.
+  void ReplayExternalOES(ResourceId snapId, GLuint oesTexture);
+#endif
 
   IMPLEMENT_FUNCTION_SERIALISED(void, glBindTexture, GLenum target, GLuint texture);
   IMPLEMENT_FUNCTION_SERIALISED(void, glBindTextures, GLuint first, GLsizei count,

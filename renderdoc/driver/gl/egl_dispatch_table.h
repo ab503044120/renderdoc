@@ -67,6 +67,9 @@ typedef EGLBoolean(EGLAPIENTRY *PFN_eglQueryContext)(EGLDisplay dpy, EGLContext 
 typedef PFNEGLPOSTSUBBUFFERNVPROC PFN_eglPostSubBufferNV;
 typedef PFNEGLSWAPBUFFERSWITHDAMAGEEXTPROC PFN_eglSwapBuffersWithDamageEXT;
 typedef PFNEGLSWAPBUFFERSWITHDAMAGEKHRPROC PFN_eglSwapBuffersWithDamageKHR;
+typedef PFNEGLCREATEIMAGEKHRPROC PFN_eglCreateImageKHR;
+typedef PFNEGLCREATEIMAGEPROC PFN_eglCreateImage;
+typedef PFNEGLGETNATIVECLIENTBUFFERANDROIDPROC PFN_eglGetNativeClientBufferANDROID;
 
 #define EGL_HOOKED_SYMBOLS(FUNC)                   \
   FUNC(BindAPI, false, true);                      \
@@ -82,7 +85,16 @@ typedef PFNEGLSWAPBUFFERSWITHDAMAGEKHRPROC PFN_eglSwapBuffersWithDamageKHR;
   FUNC(QueryString, false, true);                  \
   FUNC(PostSubBufferNV, true, false);              \
   FUNC(SwapBuffersWithDamageEXT, true, false);     \
-  FUNC(SwapBuffersWithDamageKHR, true, false);
+  FUNC(SwapBuffersWithDamageKHR, true, false);     \
+  FUNC(CreateImage, false, false);                \
+  FUNC(CreateImageKHR, true, false);
+
+#if ENABLED(RDOC_ANDROID)
+#define EGL_ANDROID_HOOKED_SYMBOLS(FUNC) \
+  FUNC(GetNativeClientBufferANDROID, true, false);
+#else
+#define EGL_ANDROID_HOOKED_SYMBOLS(FUNC)
+#endif
 
 #define EGL_NONHOOKED_SYMBOLS(FUNC)        \
   FUNC(ChooseConfig, false, true);         \
@@ -117,6 +129,7 @@ struct EGLDispatchTable
 #define EGL_PTR_GEN(func, isext, replayrequired) CONCAT(PFN_egl, func) func;
   EGL_HOOKED_SYMBOLS(EGL_PTR_GEN)
   EGL_NONHOOKED_SYMBOLS(EGL_PTR_GEN)
+  EGL_ANDROID_HOOKED_SYMBOLS(EGL_PTR_GEN)
 #undef EGL_PTR_GEN
 };
 

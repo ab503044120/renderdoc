@@ -216,6 +216,8 @@ void *HookedGetProcAddress(const char *func, void *realFunc)
   }
 
   ForEachSupported(CheckFunction);
+  ForEachSupported_OES(CheckFunction);
+
   ForEachUnsupported(CheckUnsupported);
 
   // for any other function, if it's not a core or extension function we know about,
@@ -257,6 +259,7 @@ void GLDispatchTable::PopulateWithCallback(PlatformGetProcAddr lookupFunc)
   }
 
   ForEachSupported(HookFunc);
+  ForEachSupported_OES(HookFunc);
 }
 
 static void GLHooked(void *handle, const char *libName)

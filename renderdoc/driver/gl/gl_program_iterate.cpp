@@ -384,6 +384,7 @@ void DoSerialise(SerialiserType &ser, ProgramUniformValue &el)
     case eGL_SAMPLER_BUFFER:
     case eGL_SAMPLER_2D_RECT:
     case eGL_SAMPLER_2D_RECT_SHADOW:
+    case eGL_SAMPLER_EXTERNAL_OES:
     case eGL_INT_SAMPLER_1D:
     case eGL_INT_SAMPLER_2D:
     case eGL_INT_SAMPLER_3D:
@@ -801,12 +802,8 @@ static void ForAllProgramUniforms(SerialiserType *ser, CaptureState state,
           case eGL_UNSIGNED_INT_SAMPLER_2D_MULTISAMPLE_ARRAY:
           case eGL_UNSIGNED_INT_SAMPLER_BUFFER:
           case eGL_UNSIGNED_INT_SAMPLER_2D_RECT:
+          case eGL_SAMPLER_EXTERNAL_OES:
           case eGL_IMAGE_1D:
-          case eGL_IMAGE_2D:
-          case eGL_IMAGE_3D:
-          case eGL_IMAGE_2D_RECT:
-          case eGL_IMAGE_CUBE:
-          case eGL_IMAGE_BUFFER:
           case eGL_IMAGE_1D_ARRAY:
           case eGL_IMAGE_2D_ARRAY:
           case eGL_IMAGE_CUBE_MAP_ARRAY:
@@ -1118,6 +1115,7 @@ static void ForAllProgramUniforms(SerialiserType *ser, CaptureState state,
           case eGL_UNSIGNED_INT_SAMPLER_2D_MULTISAMPLE_ARRAY:
           case eGL_UNSIGNED_INT_SAMPLER_BUFFER:
           case eGL_UNSIGNED_INT_SAMPLER_2D_RECT:
+          case eGL_SAMPLER_EXTERNAL_OES:
             if(!IsDstProgramSPIRV)    // SPIR-V shaders treat samplers as immutable
               GL.glProgramUniform1iv(progDst, dstLocation, 1, iv);
             break;

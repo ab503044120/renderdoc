@@ -7374,6 +7374,186 @@ void WrappedOpenGL::glTextureFoveationParametersQCOM(GLuint texture, GLuint laye
 
 #pragma endregion
 
+#if ENABLED(RDOC_ANDROID)
+template <typename SerialiserType>
+bool WrappedOpenGL::Serialise_glEGLImageTargetTexture2DOES(SerialiserType &ser, GLenum target,
+                                                           GLeglImageOES image)
+{
+  SERIALISE_ELEMENT(target);
+  // GLeglImageOES is void*; serialise as uint64_t since the serialiser has no void* specialisation.
+  SERIALISE_ELEMENT_LOCAL(imageHandle, (uint64_t)(uintptr_t)image)
+      .TypedAs("GLeglImageOES"_lit);
+
+  // Backward-compatible snapId read: old captures (12-byte chunk: target 4 + imageHandle 8) do not
+  // contain the snapId field. Only read it when the chunk has room (>= 20 bytes).
+  // New captures always write 20 bytes (target 4 + imageHandle 8 + snapId 8).
+  ResourceId snapId = ResourceId();
+  if(ser.IsWriting() || ser.ChunkMetadata().length >= 20)
+  {
+    // On write path, always serialise snapId (write 20-byte chunks).
+    // On read path, only attempt deserialisation when the chunk is large enough.
+    ScopedDeserialise<decltype(ser), ResourceId> CONCAT(deserialise_, __LINE__)(ser, snapId);
+    if(ser.IsWriting())
+      snapId = m_OESCurrentSnapId;
+    ser.Serialise("snapId"_lit, snapId);
+  }
+
+  SERIALISE_CHECK_READ_ERRORS();
+
+  if(IsReplayingAndReading())
+  {
+    if(target == eGL_TEXTURE_EXTERNAL_OES && snapId != ResourceId())
+    {
+      // Rebuild a real EXTERNAL_OES texture from the captured RGBA snapshot, then bind it to the
+      // currently-bound texture object. This avoids any shader rewriting (samplerExternalOES keeps
+      // working) and keeps the external source fidelity.
+      //
+      // During replay, m_TextureRecord is not updated by glBindTexture hooks (IsCaptureMode is
+      // false). Instead, query the currently-bound OES texture name from GL state, then look up
+      // its ResourceId via m_Textures. If that fails, fall back to GetActiveTexRecord.
+      GLuint oesTexName = 0;
+      GL.glGetIntegerv(eGL_TEXTURE_BINDING_EXTERNAL_OES, (GLint *)&oesTexName);
+
+      ResourceId texId = ResourceId();
+      if(oesTexName != 0)
+      {
+        // Find the ResourceId by iterating m_Textures (the name->id mapping is built during
+        // Apply_InitialState). This is reliable because the texture was created and bound by
+        // the glBindTexture chunk that precedes this glEGLImageTargetTexture2DOES chunk.
+        for(auto it = m_Textures.begin(); it != m_Textures.end(); ++it)
+        {
+          if(it->second.resource.name == oesTexName)
+          {
+            texId = it->first;
+            break;
+          }
+        }
+      }
+
+      if(texId == ResourceId())
+      {
+        // Fallback: try the context record (may work if the target index is within bounds
+        // and the record was set by a prior mechanism).
+        GLResourceRecord *record = GetCtxData().GetActiveTexRecord(target);
+        if(record)
+          texId = record->GetResourceID();
+      }
+
+      if(texId != ResourceId())
+      {
+        GLResourceRecord *r = GetResourceManager()->GetResourceRecord(texId);
+        GLuint texName = r ? r->Resource.name : oesTexName;
+        if(texName != 0)
+        {
+          ReplayExternalOES(snapId, texName);
+          GetResourceManager()->MarkResourceFrameReferenced(snapId, eFrameRef_Read);
+        }
+        else
+        {
+          RDCWARN("glEGLImageTargetTexture2DOES replay: texName is 0 for texId=%s",
+                  ToStr(texId).c_str());
+        }
+      }
+      else
+      {
+        RDCWARN("glEGLImageTargetTexture2DOES replay: cannot find OES texture record "
+                "(target=0x%04x, oesTexName=%u, snapId=%s)",
+                target, oesTexName, ToStr(snapId).c_str());
+      }
+
+      GetResourceManager()->MarkResourceFrameReferenced(texId, eFrameRef_Read);
+      return true;
+    }
+
+    // OES target but no snapId -- capture either failed or predates OES capture support.
+    if(target == eGL_TEXTURE_EXTERNAL_OES && snapId == ResourceId())
+    {
+      RDCWARN("glEGLImageTargetTexture2DOES replay: OES target but snapId is empty, "
+              "OES texture will not be rebuilt. This will result in a black/incomplete texture.");
+    }
+
+    // Non-OES path: use the active texture record as before.
+    ResourceId texId = GetCtxData().GetActiveTexRecord(target) != NULL
+                          ? GetCtxData().GetActiveTexRecord(target)->GetResourceID()
+                          : ResourceId();
+
+    if(texId != ResourceId())
+      GetResourceManager()->MarkResourceFrameReferenced(texId, eFrameRef_Read);
+  }
+
+  return true;
+}
+
+void WrappedOpenGL::glEGLImageTargetTexture2DOES(GLenum target, GLeglImageOES image)
+{
+  // Forward the real call first so the application keeps working (capture path).
+  SERIALISE_TIME_CALL(GL.glEGLImageTargetTexture2DOES(target, image));
+
+  if(IsReplayMode(m_State))
+    return;
+
+  // Avoid re-entrant capture: CaptureExternalOESPixels -> SampleOESToRGBA calls back through
+  // GL.glEGLImageTargetTexture2DOES on the capture context. m_InOESSample guards that path.
+  if(m_InOESSample)
+    return;
+
+  ResourceId snapId = ResourceId();
+
+  if(IsActiveCapturing(m_State))
+  {
+    if(target == eGL_TEXTURE_EXTERNAL_OES)
+    {
+      GLResourceRecord *record = GetCtxData().GetActiveTexRecord(target);
+      if(record != NULL)
+      {
+        ResourceId externalId = record->GetResourceID();
+        snapId = CaptureExternalOESPixels((EGLImageKHR)image, externalId, record->Resource.name);
+        RDCLOG("glEGLImageTargetTexture2DOES: captured OES pixels, externalId=%s, snapId=%s",
+                ToStr(externalId).c_str(), ToStr(snapId).c_str());
+        if(snapId != ResourceId())
+        {
+          RDCLOG("glEGLImageTargetTexture2DOES: captured OES pixels, externalId=%s, snapId=%s",
+                 ToStr(externalId).c_str(), ToStr(snapId).c_str());
+          GetResourceManager()->MarkResourceFrameReferenced(snapId, eFrameRef_Read);
+        }
+        else
+        {
+          RDCWARN("glEGLImageTargetTexture2DOES: CaptureExternalOESPixels failed");
+        }
+      }
+      else
+      {
+        RDCWARN("glEGLImageTargetTexture2DOES: No active texture record for EXTERNAL_OES");
+      }
+    }
+
+    m_OESCurrentSnapId = snapId;
+    USE_SCRATCH_SERIALISER();
+    SCOPED_SERIALISE_CHUNK(gl_CurChunk);
+    Serialise_glEGLImageTargetTexture2DOES(ser, target, image);
+    GetContextRecord()->AddChunk(scope.Get());
+  }
+  else if(IsCaptureMode(m_State) && target == eGL_TEXTURE_EXTERNAL_OES)
+  {
+    GLResourceRecord *record = GetCtxData().GetActiveTexRecord(target);
+    if(record == NULL)
+    {
+      RDCWARN("glEGLImageTargetTexture2DOES (capture mode): No active texture record");
+      return;
+    }
+
+    ResourceId externalId = record->GetResourceID();
+    ResourceId captured = CaptureExternalOESPixels((EGLImageKHR)image, externalId, record->Resource.name);
+    if(captured == ResourceId())
+      RDCWARN("glEGLImageTargetTexture2DOES (capture): CaptureExternalOESPixels failed");
+    else
+      GetResourceManager()->MarkResourceFrameReferenced(captured, eFrameRef_Read);
+  }
+}
+#endif
+
+#pragma endregion
+
 INSTANTIATE_FUNCTION_SERIALISED(void, glGenTextures, GLsizei n, GLuint *textures);
 INSTANTIATE_FUNCTION_SERIALISED(void, glCreateTextures, GLenum target, GLsizei n, GLuint *textures);
 INSTANTIATE_FUNCTION_SERIALISED(void, glBindTexture, GLenum target, GLuint texture);
@@ -7486,3 +7666,8 @@ INSTANTIATE_FUNCTION_SERIALISED(void, glInvalidateTexImage, GLuint texture, GLin
 INSTANTIATE_FUNCTION_SERIALISED(void, glInvalidateTexSubImage, GLuint texture, GLint level,
                                 GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width,
                                 GLsizei height, GLsizei depth);
+#if ENABLED(RDOC_ANDROID)
+INSTANTIATE_FUNCTION_SERIALISED(void, glEGLImageTargetTexture2DOES, GLenum target,
+                                GLeglImageOES image);
+#endif
+

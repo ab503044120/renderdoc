@@ -2003,6 +2003,7 @@ bool GLReplay::GetMinMax(ResourceId texid, const Subresource &sub, CompType type
     case eGL_TEXTURE_1D: texSlot = RESTYPE_TEX1D; break;
     default: RDCWARN("Unexpected texture type"); DELIBERATE_FALLTHROUGH();
     case eGL_TEXTURE_2D: texSlot = RESTYPE_TEX2D; break;
+    case eGL_TEXTURE_EXTERNAL_OES: texSlot = RESTYPE_TEX2D; break;
     case eGL_TEXTURE_2D_MULTISAMPLE: texSlot = RESTYPE_TEX2DMS; break;
     case eGL_TEXTURE_2D_MULTISAMPLE_ARRAY: texSlot = RESTYPE_TEX2DMSARRAY; break;
     case eGL_TEXTURE_RECTANGLE: texSlot = RESTYPE_TEXRECT; break;
@@ -2233,6 +2234,7 @@ bool GLReplay::GetHistogram(ResourceId texid, const Subresource &sub, CompType t
     case eGL_TEXTURE_1D: texSlot = RESTYPE_TEX1D; break;
     default: RDCWARN("Unexpected texture type"); DELIBERATE_FALLTHROUGH();
     case eGL_TEXTURE_2D: texSlot = RESTYPE_TEX2D; break;
+    case eGL_TEXTURE_EXTERNAL_OES: texSlot = RESTYPE_TEX2D; break;
     case eGL_TEXTURE_2D_MULTISAMPLE: texSlot = RESTYPE_TEX2DMS; break;
     case eGL_TEXTURE_2D_MULTISAMPLE_ARRAY: texSlot = RESTYPE_TEX2DMSARRAY; break;
     case eGL_TEXTURE_RECTANGLE: texSlot = RESTYPE_TEXRECT; break;

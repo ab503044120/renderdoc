@@ -13,6 +13,7 @@ set(sources
     gl_msaa_array_conv.cpp
     gl_driver.cpp
     gl_driver.h
+    gl_oes_capture.cpp
     gl_enum.h
     gl_dispatch_table_defs.h
     gl_dispatch_table.h

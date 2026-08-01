@@ -28,6 +28,11 @@
 #include "egl_dispatch_table.h"
 #include "gl_driver.h"
 
+#if ENABLED(RDOC_ANDROID)
+#include "official/eglext.h"
+#include <android/hardware_buffer.h>
+#endif
+
 RDOC_CONFIG(bool, Android_AllowAllEGLExtensions, false,
             "Normally certain extensions are removed from the EGL extension string for "
             "compatibility, but with this option that behaviour can be overridden and all "
@@ -718,6 +723,21 @@ HOOK_EXPORT EGLBoolean EGLAPIENTRY eglSwapBuffersWithDamageKHR_renderdoc_hooked(
   }
 }
 
+
+// forward declarations - the _renderdoc_hooked implementations are defined below in the EGL 1.5
+// section, but they must be declared here so eglGetProcAddress_renderdoc_hooked can take their
+// address when returning hooked function pointers via EGL_HOOKED_SYMBOLS(GPA_FUNCTION).
+HOOK_EXPORT EGLImageKHR EGLAPIENTRY eglCreateImage_renderdoc_hooked(
+    EGLDisplay dpy, EGLContext ctx, EGLenum target, EGLClientBuffer buffer,
+    const EGLAttrib *attrib_list);
+HOOK_EXPORT EGLImageKHR EGLAPIENTRY eglCreateImageKHR_renderdoc_hooked(
+    EGLDisplay dpy, EGLContext ctx, EGLenum target, EGLClientBuffer buffer,
+    const EGLint *attrib_list);
+#if ENABLED(RDOC_ANDROID)
+HOOK_EXPORT EGLClientBuffer EGLAPIENTRY eglGetNativeClientBufferANDROID_renderdoc_hooked(
+    const struct AHardwareBuffer *buffer);
+#endif
+
 HOOK_EXPORT __eglMustCastToProperFunctionPointerType EGLAPIENTRY
 eglGetProcAddress_renderdoc_hooked(const char *func)
 {
@@ -747,6 +767,7 @@ eglGetProcAddress_renderdoc_hooked(const char *func)
   if(!strcmp(func, "egl" STRINGIZE(name)))        \
     return (__eglMustCastToProperFunctionPointerType)&CONCAT(egl, CONCAT(name, _renderdoc_hooked));
   EGL_HOOKED_SYMBOLS(GPA_FUNCTION)
+  EGL_ANDROID_HOOKED_SYMBOLS(GPA_FUNCTION)
 #undef GPA_FUNCTION
 
   // any other egl functions are safe to pass through unchanged
@@ -841,6 +862,28 @@ HOOK_EXPORT __eglMustCastToProperFunctionPointerType EGLAPIENTRY eglGetProcAddre
 {
   return eglGetProcAddress_renderdoc_hooked(func);
 }
+
+// eglCreateImage is the EGL 1.5 core entry point for creating EGLImages.
+HOOK_EXPORT EGLImageKHR EGLAPIENTRY eglCreateImage(EGLDisplay dpy, EGLContext ctx, EGLenum target,
+                                                   EGLClientBuffer buffer, const EGLAttrib *attrib_list)
+{
+  return eglCreateImage_renderdoc_hooked(dpy, ctx, target, buffer, attrib_list);
+}
+
+// eglCreateImageKHR is the extension entry point used by Android's SurfaceTexture / GLConsumer.
+HOOK_EXPORT EGLImageKHR EGLAPIENTRY eglCreateImageKHR(EGLDisplay dpy, EGLContext ctx, EGLenum target,
+                                                      EGLClientBuffer buffer, const EGLint *attrib_list)
+{
+  return eglCreateImageKHR_renderdoc_hooked(dpy, ctx, target, buffer, attrib_list);
+}
+
+#if ENABLED(RDOC_ANDROID)
+HOOK_EXPORT EGLClientBuffer EGLAPIENTRY
+eglGetNativeClientBufferANDROID(const struct AHardwareBuffer *buffer)
+{
+  return eglGetNativeClientBufferANDROID_renderdoc_hooked(buffer);
+}
+#endif
 
 // on posix systems we need to export the whole of the EGL API, since we will have redirected any
 // dlopen() for libEGL.so to ourselves, and dlsym() for any of these entry points must return a
@@ -965,9 +1008,57 @@ EGL_PASSTHRU_4(EGLint, eglClientWaitSync, EGLDisplay, dpy, EGLSync, sync, EGLint
                timeout)
 EGL_PASSTHRU_4(EGLBoolean, eglGetSyncAttrib, EGLDisplay, dpy, EGLSync, sync, EGLint, attribute,
                EGLAttrib *, value)
-EGL_PASSTHRU_5(EGLImage, eglCreateImage, EGLDisplay, dpy, EGLContext, ctx, EGLenum, target,
-               EGLClientBuffer, buffer, const EGLAttrib *, attrib_list)
 EGL_PASSTHRU_2(EGLBoolean, eglDestroyImage, EGLDisplay, dpy, EGLImage, image)
+
+// eglCreateImage: pass through to the real driver, but while capturing on Android also notify
+// WrappedOpenGL so it can associate the EGLImageKHR with its EGLClientBuffer (for OES external
+// texture size/pixel capture). See gen/renderdoc/oes_external_texture_capture.md.
+HOOK_EXPORT EGLImageKHR EGLAPIENTRY eglCreateImage_renderdoc_hooked(
+    EGLDisplay dpy, EGLContext ctx, EGLenum target, EGLClientBuffer buffer,
+    const EGLAttrib *attrib_list)
+{
+  EnsureRealLibraryLoaded();
+  EGLImageKHR img = EGL.CreateImage(dpy, ctx, target, buffer, attrib_list);
+  RDCLOG("eglCreateImage hooked: target=0x%x buffer=%p image=%p", target, (void *)buffer,
+         (void *)img);
+#if ENABLED(RDOC_ANDROID)
+  if(!RenderDoc::Inst().IsReplayApp() && img != EGL_NO_IMAGE_KHR)
+    eglhook.driver.CaptureHook_eglCreateImage(target, buffer, img);
+#endif
+  return img;
+}
+
+// eglCreateImageKHR: extension variant used by Android's SurfaceTexture / GLConsumer.
+// Delegates to the same _renderdoc_hooked implementation as eglCreateImage.
+HOOK_EXPORT EGLImageKHR EGLAPIENTRY eglCreateImageKHR_renderdoc_hooked(
+    EGLDisplay dpy, EGLContext ctx, EGLenum target, EGLClientBuffer buffer,
+    const EGLint *attrib_list)
+{
+  EnsureRealLibraryLoaded();
+  EGLImageKHR img = EGL.CreateImageKHR(dpy, ctx, target, buffer, attrib_list);
+  RDCLOG("eglCreateImageKHR hooked: target=0x%x buffer=%p image=%p", target, (void *)buffer,
+         (void *)img);
+#if ENABLED(RDOC_ANDROID)
+  if(!RenderDoc::Inst().IsReplayApp() && img != EGL_NO_IMAGE_KHR)
+    eglhook.driver.CaptureHook_eglCreateImage(target, buffer, img);
+#endif
+  return img;
+}
+
+// eglGetNativeClientBufferANDROID: associate AHardwareBuffer* with EGLClientBuffer for OES capture.
+#if ENABLED(RDOC_ANDROID)
+HOOK_EXPORT EGLClientBuffer EGLAPIENTRY eglGetNativeClientBufferANDROID_renderdoc_hooked(
+    const struct AHardwareBuffer *buffer)
+{
+  EnsureRealLibraryLoaded();
+  EGLClientBuffer cb = EGL.GetNativeClientBufferANDROID(buffer);
+  RDCLOG("eglGetNativeClientBufferANDROID hooked: buffer=%p cb=%p", (const void *)buffer,
+         (void *)cb);
+  if(!RenderDoc::Inst().IsReplayApp() && cb != NULL)
+    eglhook.driver.CaptureHook_eglGetNativeClientBufferANDROID(buffer, cb);
+  return cb;
+}
+#endif
 EGL_PASSTHRU_4(EGLSurface, eglCreatePlatformPixmapSurface, EGLDisplay, dpy, EGLConfig, config,
                void *, native_pixmap, const EGLAttrib *, attrib_list)
 EGL_PASSTHRU_3(EGLBoolean, eglWaitSync, EGLDisplay, dpy, EGLSync, sync, EGLint, flags)
@@ -999,6 +1090,7 @@ static void EGLHooked(void *handle, const char *libName)
   if(!EGL.func)                                \
     EGL.func = (CONCAT(PFN_egl, func))EGL.GetProcAddress("egl" STRINGIZE(func));
   EGL_HOOKED_SYMBOLS(EGL_FETCH)
+  EGL_ANDROID_HOOKED_SYMBOLS(EGL_FETCH)
 #undef EGL_FETCH
 
 // on systems where EGL isn't the primary/only way to get GL function pointers, we need to ensure we
@@ -1121,6 +1213,7 @@ void EGLHook::RegisterHooks()
       FunctionHook("egl" STRINGIZE(func), (void **)&EGL.func, \
                                    (void *)&CONCAT(egl, CONCAT(func, _renderdoc_hooked))));
   EGL_HOOKED_SYMBOLS(EGL_REGISTER)
+  EGL_ANDROID_HOOKED_SYMBOLS(EGL_REGISTER)
 #undef EGL_REGISTER
 }
 
@@ -1145,6 +1238,7 @@ HOOK_EXPORT void AndroidGLESLayer_Initialize(void *layer_id,
   if(!EGL.func)                                                                \
     RDCWARN("Couldn't fetch function pointer for egl" STRINGIZE(func));
   EGL_HOOKED_SYMBOLS(EGL_FETCH)
+  EGL_ANDROID_HOOKED_SYMBOLS(EGL_FETCH)
   EGL_NONHOOKED_SYMBOLS(EGL_FETCH)
 #undef EGL_FETCH
 
@@ -1161,6 +1255,7 @@ HOOK_EXPORT void *AndroidGLESLayer_GetProcAddress(const char *funcName,
   if(!strcmp(funcName, "egl" STRINGIZE(name)))    \
     return (void *)&CONCAT(egl, CONCAT(name, _renderdoc_hooked));
   EGL_HOOKED_SYMBOLS(GPA_FUNCTION)
+  EGL_ANDROID_HOOKED_SYMBOLS(GPA_FUNCTION)
 #undef GPA_FUNCTION
 
   // otherwise, consult our database of hooks

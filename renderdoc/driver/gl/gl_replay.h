@@ -351,6 +351,7 @@ public:
   void UseReplayContext() { MakeCurrentReplayContext(&m_ReplayCtx); }
   bool IsReplayContext(void *ctx) { return m_ReplayCtx.ctx == NULL || ctx == m_ReplayCtx.ctx; }
   bool HasDebugContext() { return m_DebugCtx != NULL; }
+  EGLDisplay GetReplayEGLDisplay() { return m_ReplayCtx.egl_dpy; }
   void FillWithDiscardPattern(DiscardType type, GLuint framebuffer, GLsizei numAttachments,
                               const GLenum *attachments, GLint x, GLint y, GLsizei width,
                               GLsizei height);

@@ -2558,6 +2558,29 @@
   FuncWrapper2(BOOL, wglDXObjectAccessNV, HANDLE, hObject, GLenum, access); \
   FuncWrapper3(BOOL, wglDXLockObjectsNV, HANDLE, hDevice, GLint, count, HANDLE *, hObjects); \
   FuncWrapper3(BOOL, wglDXUnlockObjectsNV, HANDLE, hDevice, GLint, count, HANDLE *, hObjects); \
+  DefineOESHooks(); \
+
+
+// Android-only OES external texture hook.
+// DefineOESHooks() is called inside DefineSupportedHooks() to generate the wrapper function.
+// ForEachSupported_OES(FUNC) mirrors ForEachSupported for the OES function so that
+// CheckFunction / HookFunc macros can also handle it without late getproc.
+#if ENABLED(RDOC_ANDROID)
+#define DefineOESHooks() \
+  FuncWrapper2(void, glEGLImageTargetTexture2DOES, GLenum, target, GLeglImageOES, image);
+#define ForEachSupported_OES(FUNC) \
+  FUNC(glEGLImageTargetTexture2DOES, glEGLImageTargetTexture2DOES);
+#else
+#define DefineOESHooks()
+#define ForEachSupported_OES(FUNC)
+#endif
+
+
+
+
+
+
+
 
 
 
@@ -2866,7 +2889,6 @@
   FUNC(glEdgeFlagv); \
   FUNC(glEGLImageTargetRenderbufferStorageOES); \
   FUNC(glEGLImageTargetTexStorageEXT); \
-  FUNC(glEGLImageTargetTexture2DOES); \
   FUNC(glEGLImageTargetTextureStorageEXT); \
   FUNC(glElementPointerAPPLE); \
   FUNC(glElementPointerATI); \
@@ -4775,7 +4797,6 @@
   UnsupportedWrapper1(void, glEdgeFlagv, const GLboolean *, flag); \
   UnsupportedWrapper2(void, glEGLImageTargetRenderbufferStorageOES, GLenum, target, GLeglImageOES, image); \
   UnsupportedWrapper3(void, glEGLImageTargetTexStorageEXT, GLenum, target, GLeglImageOES, image, const GLint*, attrib_list); \
-  UnsupportedWrapper2(void, glEGLImageTargetTexture2DOES, GLenum, target, GLeglImageOES, image); \
   UnsupportedWrapper3(void, glEGLImageTargetTextureStorageEXT, GLuint, texture, GLeglImageOES, image, const GLint*, attrib_list); \
   UnsupportedWrapper2(void, glElementPointerAPPLE, GLenum, type, const void *, pointer); \
   UnsupportedWrapper2(void, glElementPointerATI, GLenum, type, const void *, pointer); \

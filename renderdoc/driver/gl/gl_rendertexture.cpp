@@ -66,6 +66,7 @@ bool GLReplay::RenderTextureInternal(TextureDisplay cfg, TexDisplayFlags flags)
     case eGL_TEXTURE_1D: resType = RESTYPE_TEX1D; break;
     default: RDCWARN("Unexpected texture type"); DELIBERATE_FALLTHROUGH();
     case eGL_TEXTURE_2D: resType = RESTYPE_TEX2D; break;
+    case eGL_TEXTURE_EXTERNAL_OES: resType = RESTYPE_TEX2D; break;
     case eGL_TEXTURE_2D_MULTISAMPLE: resType = RESTYPE_TEX2DMS; break;
     case eGL_TEXTURE_2D_MULTISAMPLE_ARRAY: resType = RESTYPE_TEX2DMSARRAY; break;
     case eGL_TEXTURE_RECTANGLE: resType = RESTYPE_TEXRECT; break;

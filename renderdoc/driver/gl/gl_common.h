@@ -2234,6 +2234,12 @@ enum class GLChunk : uint32_t
   glBlendEquationARB,
   glPrimitiveBoundingBoxARB,
 
+  // OES external texture capture (Android only). See gen/renderdoc/oes_external_texture_capture.md.
+#if ENABLED(RDOC_ANDROID)
+  glEGLImageTargetTexture2DOES,
+#endif
+
+
   SwapBuffers,
   wglSwapBuffers,
   glXSwapBuffers,

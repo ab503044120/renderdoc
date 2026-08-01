@@ -305,6 +305,11 @@ public:
 
   void SetInternalResource(GLResource res);
 
+  // OES external texture capture (Android) needs to trigger the standard initial-contents
+  // serialisation for the RGBA snapshot texture it creates. See
+  // gen/renderdoc/oes_external_texture_capture.md.
+  void PrepareTextureInitialContents(ResourceId id, GLResource res);
+
 private:
   // forward this on. We de-alias it so that uses of GetID() within the GL driver aren't virtual
   ResourceId GetID(GLResource res) { return GetResID(res); }
@@ -312,7 +317,7 @@ private:
   bool Prepare_InitialState(GLResource res);
   uint64_t GetSize_InitialState(ResourceId resid, const GLInitialContents &initial);
 
-  void PrepareTextureInitialContents(ResourceId id, GLResource res);
+
 
   void Create_InitialState(ResourceId id, GLResource live, bool hasData);
   void Apply_InitialState(GLResource live, GLInitialContents &initial);

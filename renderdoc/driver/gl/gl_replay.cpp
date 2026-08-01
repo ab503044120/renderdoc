@@ -515,17 +515,20 @@ void GLReplay::CacheTexture(ResourceId id)
 
   if(res.width == 0 && width > 0)
   {
-    RDCWARN("TextureData::width didn't get filled out, setting at last minute");
+    RDCWARN("TextureData::width didn't get filled out for %s, setting at last minute to %d",
+            ToStr(id).c_str(), width);
     res.width = width;
   }
   if(res.height == 0 && height > 0)
   {
-    RDCWARN("TextureData::height didn't get filled out, setting at last minute");
+    RDCWARN("TextureData::height didn't get filled out for %s, setting at last minute to %d",
+            ToStr(id).c_str(), height);
     res.height = height;
   }
   if(res.depth == 0 && depth > 0)
   {
-    RDCWARN("TextureData::depth didn't get filled out, setting at last minute");
+    RDCWARN("TextureData::depth didn't get filled out for %s, setting at last minute to %d",
+            ToStr(id).c_str(), depth);
     res.depth = depth;
   }
 
@@ -548,6 +551,7 @@ void GLReplay::CacheTexture(ResourceId id)
     case eGL_TEXTURE_2D_MULTISAMPLE_ARRAY: tex.type = TextureType::Texture2DMSArray; break;
     case eGL_TEXTURE_CUBE_MAP: tex.type = TextureType::TextureCube; break;
     case eGL_TEXTURE_CUBE_MAP_ARRAY: tex.type = TextureType::TextureCubeArray; break;
+    case eGL_TEXTURE_EXTERNAL_OES: tex.type = TextureType::Texture2D; break;
 
     default:
       tex.type = TextureType::Unknown;
@@ -570,6 +574,7 @@ void GLReplay::CacheTexture(ResourceId id)
     case eGL_TEXTURE_RECTANGLE:
     case eGL_TEXTURE_2D_MULTISAMPLE:
     case eGL_TEXTURE_CUBE_MAP:
+    case eGL_TEXTURE_EXTERNAL_OES:
       tex.dimension = 2;
       tex.width = (uint32_t)width;
       tex.height = (uint32_t)height;
