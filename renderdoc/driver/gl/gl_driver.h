@@ -986,6 +986,7 @@ public:
   // Called from the EGL hook layer to keep the AHW<->CB<->Image maps populated.
   void CaptureHook_eglGetNativeClientBufferANDROID(const void *buffer, EGLClientBuffer cb);
   void CaptureHook_eglCreateImage(EGLenum target, EGLClientBuffer buffer, EGLImageKHR image);
+  void CaptureHook_eglDestroyImage(EGLImageKHR image);
 
   // Resolve the AHardwareBuffer backing an EGLImage (map first, offset fallback for
   // Java SurfaceTexture path where the framework never calls eglGetNativeClientBufferANDROID).

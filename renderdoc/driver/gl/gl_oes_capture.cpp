@@ -77,6 +77,7 @@ typedef int (*PFN_AHardwareBuffer_lock)(AHardwareBuffer *buffer, uint64_t usage,
                                         const ARect *rect, void **outVirtualAddress);
 typedef int (*PFN_AHardwareBuffer_unlock)(AHardwareBuffer *buffer, int32_t *fence);
 typedef int (*PFN_AHardwareBuffer_allocate)(const AHardwareBuffer_Desc *desc, AHardwareBuffer **outBuffer);
+typedef void (*PFN_AHardwareBuffer_release)(AHardwareBuffer *buffer);
 
 struct OESAndroidFuncs
 {
@@ -84,6 +85,7 @@ struct OESAndroidFuncs
   PFN_AHardwareBuffer_lock AHardwareBuffer_lock = NULL;
   PFN_AHardwareBuffer_unlock AHardwareBuffer_unlock = NULL;
   PFN_AHardwareBuffer_allocate AHardwareBuffer_allocate = NULL;
+  PFN_AHardwareBuffer_release AHardwareBuffer_release = NULL;
   bool resolved = false;
 };
 }    // namespace
@@ -109,8 +111,11 @@ static void InitOESAndroidFuncs()
         (PFN_AHardwareBuffer_unlock)Process::GetFunctionAddress(android, "AHardwareBuffer_unlock");
     OESAndroid.AHardwareBuffer_allocate =
         (PFN_AHardwareBuffer_allocate)Process::GetFunctionAddress(android, "AHardwareBuffer_allocate");
-    RDCLOG("InitOESAndroidFuncs: AHardwareBuffer_allocate=%p",
-           (void *)OESAndroid.AHardwareBuffer_allocate);
+    OESAndroid.AHardwareBuffer_release =
+        (PFN_AHardwareBuffer_release)Process::GetFunctionAddress(android, "AHardwareBuffer_release");
+    RDCLOG("InitOESAndroidFuncs: AHardwareBuffer_allocate=%p AHardwareBuffer_release=%p",
+           (void *)OESAndroid.AHardwareBuffer_allocate,
+           (void *)OESAndroid.AHardwareBuffer_release);
   }
   else
   {
@@ -139,6 +144,13 @@ void WrappedOpenGL::CaptureHook_eglCreateImage(EGLenum target, EGLClientBuffer b
          target, (void *)buffer, (void *)image);
   if(target == EGL_NATIVE_BUFFER_ANDROID && image != EGL_NO_IMAGE_KHR && buffer != NULL)
     m_ImageToCB[image] = buffer;
+}
+
+void WrappedOpenGL::CaptureHook_eglDestroyImage(EGLImageKHR image)
+{
+  RDCLOG("CaptureHook_eglDestroyImage: image=%p", (void *)image);
+  if(image != EGL_NO_IMAGE_KHR)
+    m_ImageToCB.erase(image);
 }
 
 // ---------------------------------------------------------------------------
@@ -752,6 +764,12 @@ void WrappedOpenGL::ReplayExternalOES(ResourceId snapId, GLuint oesTexture)
     return;
   }
 
+  // Ensure ahb is released on every exit path after a successful allocation.
+  auto releaseAHB = [&]() {
+    if(ahb && OESAndroid.AHardwareBuffer_release)
+      OESAndroid.AHardwareBuffer_release(ahb);
+  };
+
   // Re-read the descriptor after allocation: some drivers do not fill in desc.stride
   // during allocate, and we need the real stride for the CPU-side row copy below.
   if(OESAndroid.AHardwareBuffer_describe)
@@ -769,6 +787,7 @@ void WrappedOpenGL::ReplayExternalOES(ResourceId snapId, GLuint oesTexture)
     {
       RDCERR("ReplayExternalOES: snapshot texture name is 0 for snapId=%s",
              ToStr(snapId).c_str());
+      releaseAHB();
       return;
     }
 
@@ -811,6 +830,7 @@ void WrappedOpenGL::ReplayExternalOES(ResourceId snapId, GLuint oesTexture)
   {
     RDCERR("ReplayExternalOES: AHardwareBuffer_lock failed (ret=%d, addr=%p)",
            lockRet, addr);
+    releaseAHB();
     return;
   }
 
@@ -825,6 +845,7 @@ void WrappedOpenGL::ReplayExternalOES(ResourceId snapId, GLuint oesTexture)
     RDCERR("ReplayExternalOES: EGL entry points unavailable via dispatch table "
            "(GetNativeClientBufferANDROID=%p CreateImage=%p)",
            (void *)EGL.GetNativeClientBufferANDROID, (void *)EGL.CreateImage);
+    releaseAHB();
     return;
   }
 
@@ -832,6 +853,7 @@ void WrappedOpenGL::ReplayExternalOES(ResourceId snapId, GLuint oesTexture)
   if(dpy == EGL_NO_DISPLAY)
   {
     RDCERR("ReplayExternalOES: eglGetCurrentDisplay returned EGL_NO_DISPLAY");
+    releaseAHB();
     return;
   }
 
@@ -841,6 +863,7 @@ void WrappedOpenGL::ReplayExternalOES(ResourceId snapId, GLuint oesTexture)
   {
     RDCERR("ReplayExternalOES: eglGetNativeClientBufferANDROID returned NULL (ahb=%p dpy=%p)",
            (void *)ahb, (void *)dpy);
+    releaseAHB();
     return;
   }
   RDCLOG("ReplayExternalOES: cb=%p, calling EGL.CreateImage(dpy=%p "
@@ -868,6 +891,7 @@ void WrappedOpenGL::ReplayExternalOES(ResourceId snapId, GLuint oesTexture)
     if(GL.glEGLImageTargetTexture2DOES == NULL)
     {
       RDCERR("ReplayExternalOES: GL.glEGLImageTargetTexture2DOES is NULL, cannot bind OES texture");
+      releaseAHB();
       return;
     }
 
@@ -885,6 +909,8 @@ void WrappedOpenGL::ReplayExternalOES(ResourceId snapId, GLuint oesTexture)
            "CreateImage=%p ahb=%p w=%u h=%u)",
            eglErr, (void *)dpy, (void *)cb, (void *)EGL.CreateImage, (void *)ahb, w, h);
   }
+
+  releaseAHB();
 }
 
 #endif    // RDOC_ANDROID

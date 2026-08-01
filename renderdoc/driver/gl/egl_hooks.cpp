@@ -1008,7 +1008,24 @@ EGL_PASSTHRU_4(EGLint, eglClientWaitSync, EGLDisplay, dpy, EGLSync, sync, EGLint
                timeout)
 EGL_PASSTHRU_4(EGLBoolean, eglGetSyncAttrib, EGLDisplay, dpy, EGLSync, sync, EGLint, attribute,
                EGLAttrib *, value)
-EGL_PASSTHRU_2(EGLBoolean, eglDestroyImage, EGLDisplay, dpy, EGLImage, image)
+HOOK_EXPORT EGLBoolean EGLAPIENTRY eglDestroyImage_renderdoc_hooked(EGLDisplay dpy, EGLImageKHR image)
+{
+  EnsureRealLibraryLoaded();
+  typedef EGLBoolean (*eglDestroyImage_hooktype)(EGLDisplay, EGLImageKHR);
+  eglDestroyImage_hooktype real =
+      (eglDestroyImage_hooktype)Process::GetFunctionAddress(eglhook.handle, "eglDestroyImage");
+  EGLBoolean ret = real(dpy, image);
+#if ENABLED(RDOC_ANDROID)
+  if(!RenderDoc::Inst().IsReplayApp() && ret)
+    eglhook.driver.CaptureHook_eglDestroyImage(image);
+#endif
+  return ret;
+}
+
+HOOK_EXPORT EGLBoolean EGLAPIENTRY eglDestroyImage(EGLDisplay dpy, EGLImageKHR image)
+{
+  return eglDestroyImage_renderdoc_hooked(dpy, image);
+}
 
 // eglCreateImage: pass through to the real driver, but while capturing on Android also notify
 // WrappedOpenGL so it can associate the EGLImageKHR with its EGLClientBuffer (for OES external
