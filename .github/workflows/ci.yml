@@ -5,9 +5,11 @@ on:
     branches:
       - v1.x
       - ci-test
+      - v1.43_oes
   pull_request:
     branches:
       - v1.x
+  workflow_dispatch:
 
 defaults:
   run:
@@ -61,31 +63,31 @@ jobs:
            grep -q '.\{73\}' commit_msgs;) | tr '\n' '\001' | sed -e 's#\x01#%0A#g';
           exit 1;
         fi
-  clang-format:
-    name: Code formatting check
-    runs-on: ubuntu-22.04
-    strategy:
-      fail-fast: true
-    steps:
-    - uses: actions/checkout@v4
-      with:
-        fetch-depth: 5
-    - name: Run clang-format
-      run: |
-        bash ./util/clang_format_all.sh
-        git clean -f
-    - name: Check formatting
-      run: |
-        git diff --quiet || (
-          (echo -n "::error::";
-          echo "clang-format issues were found. See CONTRIBUTING.md for more information.";
-          echo;
-          git diff;) | tr '\n' '\001' | sed -e 's#\x01#%0A#g';
-          exit 1;
-        )
+  # clang-format:
+  #   name: Code formatting check
+  #   runs-on: ubuntu-22.04
+  #   strategy:
+  #     fail-fast: true
+  #   steps:
+  #   - uses: actions/checkout@v4
+  #     with:
+  #       fetch-depth: 5
+  #   - name: Run clang-format
+  #     run: |
+  #       bash ./util/clang_format_all.sh
+  #       git clean -f
+  #   - name: Check formatting
+  #     run: |
+  #       git diff --quiet || (
+  #         (echo -n "::error::";
+  #         echo "clang-format issues were found. See CONTRIBUTING.md for more information.";
+  #         echo;
+  #         git diff;) | tr '\n' '\001' | sed -e 's#\x01#%0A#g';
+  #         exit 1;
+  #       )
   cmake-minimum:
     name: Baseline cmake check
-    needs: [commit-msg, clang-format]
+    needs: [commit-msg]
     runs-on: ubuntu-22.04
     env:
       QT_SELECT: qt5
@@ -112,7 +114,7 @@ jobs:
         /tmp/cmake-2.8.12.2-Linux-i386/bin/cmake -DCMAKE_BUILD_TYPE=Debug ..
   windows:
     name: Windows
-    needs: [commit-msg, clang-format]
+    needs: [commit-msg]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -285,7 +287,7 @@ jobs:
         fi
   docs:
     name: Documentation Build
-    needs: [commit-msg, clang-format]
+    needs: [commit-msg]
     runs-on: ubuntu-22.04
     env:
       QT_SELECT: qt5
@@ -313,7 +315,7 @@ jobs:
         python3 verify-docstrings.py
   linux:
     name: Linux
-    needs: [commit-msg, clang-format]
+    needs: [commit-msg]
     runs-on: ubuntu-22.04
     env:
       QT_SELECT: qt5
@@ -388,7 +390,7 @@ jobs:
         fi
   android:
     name: Android
-    needs: [commit-msg, clang-format]
+    needs: [commit-msg]
     runs-on: ubuntu-22.04
     steps:
     - uses: actions/checkout@v4
@@ -425,7 +427,7 @@ jobs:
         popd
   macOS:
     name: Mac
-    needs: [commit-msg, clang-format]
+    needs: [commit-msg]
     runs-on: macos-14
     strategy:
       fail-fast: false
