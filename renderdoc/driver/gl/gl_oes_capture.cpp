@@ -51,9 +51,8 @@
 // are reported unavailable when the NDK is built against a lower minSdk.
 //
 // Following the "use Android's EGL directly" guideline, we resolve EGL/AHardwareBuffer symbols at
-// runtime from the system libEGL.so / libandroid.so via Process::LoadModule/GetFunctionAddress. The
-// structs/types and constants from <android/hardware_buffer.h> are manually declared below to avoid
-// a hard dependency on that header (NDK r14b CI compatibility).
+// runtime from the system libEGL.so / libandroid.so via Process::LoadModule/GetFunctionAddress.
+// AHardwareBuffer types/constants are taken from <android/hardware_buffer.h> (NDK r19+).
 
 #if ENABLED(RDOC_ANDROID)
 

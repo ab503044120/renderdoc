@@ -136,9 +136,9 @@ sdkmanager --sdk_root=%ANDROID_SDK% "build-tools;26.0.1" "platforms;android-23"
 
 # Set up the Android NDK
 cd %ANDROID_SDK%
-wget http://dl.google.com/android/repository/android-ndk-r14b-windows-x86_64.zip
-unzip android-ndk-r14b-windows-x86_64.zip
-set ANDROID_NDK=%ANDROID_SDK%\android-ndk-r14b
+wget https://dl.google.com/android/repository/android-ndk-r21e-windows-x86_64.zip
+unzip android-ndk-r21e-windows-x86_64.zip
+set ANDROID_NDK=%ANDROID_SDK%\android-ndk-r21e
 ```
 
 ### Android Dependencies on Linux
@@ -168,9 +168,9 @@ cd tools/bin/
 
 # Set up Android NDK
 pushd $ANDROID_SDK
-wget http://dl.google.com/android/repository/android-ndk-r14b-linux-x86_64.zip
-unzip android-ndk-r14b-linux-x86_64.zip
-export ANDROID_NDK=$ANDROID_SDK/android-ndk-r14b
+wget https://dl.google.com/android/repository/android-ndk-r21e-linux-x86_64.zip
+unzip android-ndk-r21e-linux-x86_64.zip
+export ANDROID_NDK=$ANDROID_SDK/android-ndk-r21e
 ```
 
 ### Android Dependencies on Mac
@@ -196,8 +196,8 @@ cd tools/bin/
 
 # Set up Android NDK
 pushd $ANDROID_SDK
-wget https://dl.google.com/android/repository/android-ndk-r14b-darwin-x86_64.zip
-unzip android-ndk-r14b-darwin-x86_64.zip
-export ANDROID_NDK=$ANDROID_SDK/android-ndk-r14b
+wget https://dl.google.com/android/repository/android-ndk-r21e-darwin-x86_64.zip
+unzip android-ndk-r21e-darwin-x86_64.zip
+export ANDROID_NDK=$ANDROID_SDK/android-ndk-r21e
 ```
 
