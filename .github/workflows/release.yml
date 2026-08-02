@@ -1,0 +1,189 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  windows-release:
+    name: Windows VS2022 x64 Release
+    runs-on: windows-2025
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Download optional 3rdparty extras
+      run: |
+        curl https://renderdoc.org/qrenderdoc_3rdparty.zip -O
+        7z x qrenderdoc_3rdparty.zip
+
+    - name: Set up Visual Studio tools
+      uses: microsoft/setup-msbuild@v2
+
+    - name: Build VS2022 x64 Release
+      run: msbuild.exe renderdoc.sln /m /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143
+      shell: powershell
+
+    - name: Collect release artifacts
+      shell: powershell
+      run: |
+        $distDir = "dist\RenderDoc_x64"
+        New-Item -ItemType Directory -Force -Path $distDir | Out-Null
+
+        # 复制主要二进制文件
+        Copy-Item "x64\Release\qrenderdoc.exe" -Destination "$distDir\" -ErrorAction SilentlyContinue
+        Copy-Item "x64\Release\renderdoccmd.exe" -Destination "$distDir\" -ErrorAction SilentlyContinue
+        Copy-Item "x64\Release\renderdoc.dll" -Destination "$distDir\" -ErrorAction SilentlyContinue
+        Copy-Item "x64\Release\renderdoc.json" -Destination "$distDir\" -ErrorAction SilentlyContinue
+        Copy-Item "x64\Release\renderdocshim64.dll" -Destination "$distDir\" -ErrorAction SilentlyContinue
+        Copy-Item "x64\Release\dbghelp.dll" -Destination "$distDir\" -ErrorAction SilentlyContinue
+        Copy-Item "x64\Release\symsrv.dll" -Destination "$distDir\" -ErrorAction SilentlyContinue
+        Copy-Item "x64\Release\symsrv.yes" -Destination "$distDir\" -ErrorAction SilentlyContinue
+        Copy-Item "x64\Release\d3dcompiler_47.dll" -Destination "$distDir\" -ErrorAction SilentlyContinue
+
+        # 复制 renderdoc_app.h 头文件
+        Copy-Item "renderdoc\api\renderdoc_app.h" -Destination "$distDir\" -ErrorAction SilentlyContinue
+
+        # 复制 Qt DLL
+        Copy-Item "x64\Release\Qt5Core.dll" -Destination "$distDir\" -ErrorAction SilentlyContinue
+        Copy-Item "x64\Release\Qt5Gui.dll" -Destination "$distDir\" -ErrorAction SilentlyContinue
+        Copy-Item "x64\Release\Qt5Widgets.dll" -Destination "$distDir\" -ErrorAction SilentlyContinue
+        Copy-Item "x64\Release\Qt5Network.dll" -Destination "$distDir\" -ErrorAction SilentlyContinue
+        Copy-Item "x64\Release\Qt5Svg.dll" -Destination "$distDir\" -ErrorAction SilentlyContinue
+
+        # 复制 Python 相关
+        Copy-Item "x64\Release\python36.dll" -Destination "$distDir\" -ErrorAction SilentlyContinue
+        Copy-Item "x64\Release\python36.zip" -Destination "$distDir\" -ErrorAction SilentlyContinue
+        Copy-Item "x64\Release\_ctypes.pyd" -Destination "$distDir\" -ErrorAction SilentlyContinue
+        Copy-Item "x64\Release\shiboken2.dll" -Destination "$distDir\" -ErrorAction SilentlyContinue
+
+        # 复制插件目录
+        if (Test-Path "x64\Release\plugins") {
+          Copy-Item "x64\Release\plugins" -Destination "$distDir\" -Recurse -ErrorAction SilentlyContinue
+        }
+
+        # 复制 Qt plugins
+        if (Test-Path "x64\Release\qtplugins") {
+          Copy-Item "x64\Release\qtplugins" -Destination "$distDir\" -Recurse -ErrorAction SilentlyContinue
+        }
+
+        # 复制 PySide2
+        if (Test-Path "x64\Release\PySide2") {
+          Copy-Item "x64\Release\PySide2" -Destination "$distDir\" -Recurse -ErrorAction SilentlyContinue
+        }
+
+        # 复制 LICENSE
+        Copy-Item "LICENSE.md" -Destination "$distDir\" -ErrorAction SilentlyContinue
+
+        Write-Host "Release artifacts collected to $distDir"
+        Get-ChildItem -Recurse $distDir
+
+    - name: Package as zip
+      shell: powershell
+      run: |
+        $version = (Get-Date -Format "yyyyMMdd") + "-" + $env:GITHUB_SHA.Substring(0, 7)
+        $zipName = "RenderDoc_Windows_VS2022_x64_${version}.zip"
+        Compress-Archive -Path "dist\RenderDoc_x64\*" -DestinationPath $zipName
+        echo "ZIP_NAME=$zipName" >> $env:GITHUB_ENV
+        Write-Host "Created $zipName"
+
+    - name: Upload to Release
+      uses: softprops/action-gh-release@v2
+      if: github.event_name == 'release'
+      with:
+        files: ${{ env.ZIP_NAME }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Upload artifact (for workflow_dispatch)
+      uses: actions/upload-artifact@v4
+      if: github.event_name != 'release'
+      with:
+        name: Windows_VS2022_x64_Release
+        path: ${{ env.ZIP_NAME }}
+
+  android-release:
+    name: Android Release
+    runs-on: ubuntu-22.04
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - uses: actions/setup-java@v4
+      with:
+        distribution: 'zulu'
+        java-version: '8'
+
+    - name: Install Android SDK and NDK r21e
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libncurses5
+        export ARCH=`uname -m`
+        wget -q http://dl.google.com/android/repository/sdk-tools-linux-3859397.zip
+        wget -q https://dl.google.com/android/repository/android-ndk-r21e-linux-${ARCH}.zip
+        unzip -u -q android-ndk-r21e-linux-${ARCH}.zip -d $GITHUB_WORKSPACE
+        unzip -u -q sdk-tools-linux-3859397.zip -d $GITHUB_WORKSPACE
+        echo "ANDROID_NDK=$GITHUB_WORKSPACE/android-ndk-r21e" >> $GITHUB_ENV
+        echo "ANDROID_HOME=$GITHUB_WORKSPACE/" >> $GITHUB_ENV
+
+        pushd $GITHUB_WORKSPACE/tools/bin
+        (yes 2>/dev/null | ./sdkmanager --sdk_root=$GITHUB_WORKSPACE "build-tools;26.0.1" "platforms;android-23") || echo
+        popd
+
+        sudo rm -rf /usr/local/lib/android
+
+    - name: Build Android arm32 (armeabi-v7a)
+      run: |
+        mkdir build-android-arm32
+        pushd build-android-arm32
+        cmake -DBUILD_ANDROID=On -DANDROID_ABI=armeabi-v7a -DANDROID_NATIVE_API_LEVEL=23 -DCMAKE_BUILD_TYPE=Release -DSTRIP_ANDROID_LIBRARY=On ..
+        make -j$(nproc)
+        popd
+
+    - name: Build Android arm64 (arm64-v8a)
+      run: |
+        mkdir build-android-arm64
+        pushd build-android-arm64
+        cmake -DBUILD_ANDROID=On -DANDROID_ABI=arm64-v8a -DANDROID_NATIVE_API_LEVEL=23 -DCMAKE_BUILD_TYPE=Release -DSTRIP_ANDROID_LIBRARY=On ..
+        make -j$(nproc)
+        popd
+
+    - name: Collect Android artifacts
+      run: |
+        mkdir -p dist/android
+        cp build-android-arm32/bin/*.apk dist/android/ 2>/dev/null || true
+        cp build-android-arm64/bin/*.apk dist/android/ 2>/dev/null || true
+        echo "Android APKs:"
+        ls -lh dist/android/
+
+    - name: Package Android artifacts
+      run: |
+        VERSION=$(date +%Y%m%d)-${GITHUB_SHA:0:7}
+        ZIP_NAME="RenderDoc_Android_${VERSION}.zip"
+        cd dist/android
+        zip -r "../../${ZIP_NAME}" *.apk
+        cd ../..
+        echo "ZIP_NAME=${ZIP_NAME}" >> $GITHUB_ENV
+        ls -lh "${ZIP_NAME}"
+
+    - name: Upload to Release
+      uses: softprops/action-gh-release@v2
+      if: github.event_name == 'release'
+      with:
+        files: ${{ env.ZIP_NAME }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Upload artifact (for workflow_dispatch)
+      uses: actions/upload-artifact@v4
+      if: github.event_name != 'release'
+      with:
+        name: Android_Release
+        path: ${{ env.ZIP_NAME }}
