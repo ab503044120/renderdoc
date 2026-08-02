@@ -7509,11 +7509,9 @@ void WrappedOpenGL::glEGLImageTargetTexture2DOES(GLenum target, GLeglImageOES im
         ResourceId externalId = record->GetResourceID();
         snapId = CaptureExternalOESPixels((EGLImageKHR)image, externalId, record->Resource.name);
         RDCLOG("glEGLImageTargetTexture2DOES: captured OES pixels, externalId=%s, snapId=%s",
-                ToStr(externalId).c_str(), ToStr(snapId).c_str());
+               ToStr(externalId).c_str(), ToStr(snapId).c_str());
         if(snapId != ResourceId())
         {
-          RDCLOG("glEGLImageTargetTexture2DOES: captured OES pixels, externalId=%s, snapId=%s",
-                 ToStr(externalId).c_str(), ToStr(snapId).c_str());
           GetResourceManager()->MarkResourceFrameReferenced(snapId, eFrameRef_Read);
         }
         else

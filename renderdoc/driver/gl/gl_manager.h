@@ -307,7 +307,7 @@ public:
 
   // OES external texture capture (Android) needs to trigger the standard initial-contents
   // serialisation for the RGBA snapshot texture it creates. See
-  // gen/renderdoc/oes_external_texture_capture.md.
+  // See the OES external texture capture design doc in gen/renderdoc.
   void PrepareTextureInitialContents(ResourceId id, GLResource res);
 
 private:

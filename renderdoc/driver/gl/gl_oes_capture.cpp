@@ -35,7 +35,7 @@
 // not call eglGetNativeClientBufferANDROID (Java SurfaceTexture path) we fall back to a fixed
 // offset between ANativeWindowBuffer and AHardwareBuffer.
 //
-// See gen/renderdoc/oes_external_texture_capture.md for the full design.
+// See the OES external texture capture design doc in gen/renderdoc for the full design.
 
 #include "gl_driver.h"
 #include "gl_replay.h"
@@ -50,12 +50,18 @@
 // eglGetNativeClientBufferANDROID and the AHardwareBuffer_* helpers as __INTRODUCED_IN(26), which
 // are reported unavailable when the NDK is built against a lower minSdk.
 //
-// Following the "use Android's EGL directly" guideline, we resolve these symbols at runtime from
-// the system libEGL.so / libandroid.so via Process::LoadModule/GetFunctionAddress. The structs/types
-// from <android/hardware_buffer.h> are still usable; only the function entry points are fetched
-// dynamically.
+// Following the "use Android's EGL directly" guideline, we resolve EGL/AHardwareBuffer symbols at
+// runtime from the system libEGL.so / libandroid.so via Process::LoadModule/GetFunctionAddress. The
+// structs/types and constants from <android/hardware_buffer.h> are manually declared below to avoid
+// a hard dependency on that header (NDK r14b CI compatibility).
 
 #if ENABLED(RDOC_ANDROID)
+
+// Use the NDK's own AHardwareBuffer / ARect types and the AHARDWAREBUFFER_* constants directly.
+// <android/hardware_buffer.h> (and the <android/rect.h> it pulls in) is available from NDK r19 /
+// API level 26 onward, which matches the Android 9+ devices this feature targets. The actual
+// AHardwareBuffer entry points are resolved at runtime via Process::LoadModule("libandroid.so"),
+// so we never link against the NDK's function stubs here.
 
 #include <android/hardware_buffer.h>
 #include <android/native_window.h>
@@ -64,7 +70,7 @@
 // ---------------------------------------------------------------------------
 // Runtime resolution of Android AHardwareBuffer entry points.
 // These are only guaranteed to exist on the Android 26+ devices we target for OES capture, so we
-// fetch them lazily from the system libraries instead of linking against NDK 24's unavailable stubs.
+// fetch them lazily from the system libraries instead of linking against the NDK's function stubs.
 // EGL entry points (eglGetCurrentDisplay, eglGetNativeClientBufferANDROID, eglCreateImage) are
 // already available through the dispatch table (EGL.xxx), so they are NOT resolved here.
 //
@@ -354,7 +360,10 @@ static GLuint GetOESSampleProgram()
   return prog;
 }
 
-// Actual GL sampling work -- must be called while the capture thread's own EGL context is current.
+// Actual GL sampling work. It is normally called from the capture thread (its own EGL context
+// current), but the caller may also invoke it directly on its own current context as a fallback
+// when the capture thread is unavailable or a job times out. Either way a valid GL context must
+// be current; m_InOESSample guards against recursive re-entry.
 byte *SampleOESToRGBA(WrappedOpenGL *drv, EGLImageKHR image, uint32_t w, uint32_t h)
 {
   GLuint tex = 0, fbo = 0, rbo = 0;

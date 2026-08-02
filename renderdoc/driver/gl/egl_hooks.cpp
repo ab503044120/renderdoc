@@ -1029,7 +1029,7 @@ HOOK_EXPORT EGLBoolean EGLAPIENTRY eglDestroyImage(EGLDisplay dpy, EGLImageKHR i
 
 // eglCreateImage: pass through to the real driver, but while capturing on Android also notify
 // WrappedOpenGL so it can associate the EGLImageKHR with its EGLClientBuffer (for OES external
-// texture size/pixel capture). See gen/renderdoc/oes_external_texture_capture.md.
+// texture size/pixel capture). See the OES external texture capture design doc in gen/renderdoc.
 HOOK_EXPORT EGLImageKHR EGLAPIENTRY eglCreateImage_renderdoc_hooked(
     EGLDisplay dpy, EGLContext ctx, EGLenum target, EGLClientBuffer buffer,
     const EGLAttrib *attrib_list)

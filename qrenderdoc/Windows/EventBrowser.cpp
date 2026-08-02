@@ -2249,9 +2249,11 @@ Use the context spinner in the filter strip to select from available contexts.
   IEventBrowser::EventFilterCallback filterFunction_glctx(QString name, QString parameters,
                                                           ParseTrace &trace)
   {
-    // $glctx(resourceId) => returns true only if the event belongs to the specified GL context
-    // We compare by ToStr(ResourceId) string to avoid needing ResourceId construction
-    // Use the entire trimmed parameter as-is (ToStr(ResourceId) contains "::" which tokenise splits)
+    // $glctx(resourceId) => returns true if the event belongs to the specified GL context.
+    // When the event's context cannot be determined (no mapping / out of range / empty ResourceId)
+    // it is let through (returns true), so the filter never hides events it can't classify.
+    // We compare by ToStr(ResourceId) string to avoid needing ResourceId construction.
+    // Use the entire trimmed parameter as-is (ToStr(ResourceId) contains "::" which tokenise splits).
     QString targetCtxStr = parameters.trimmed();
 
     if(targetCtxStr.isEmpty())
